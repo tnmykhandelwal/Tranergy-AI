@@ -1,0 +1,30 @@
+{
+  "name": "tranergy-ai",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-assisted renewable-energy verification and microgrid coordination",
+  "workspaces": [
+    "apps/web",
+    "services/api"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w services/api",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:ml": "bash scripts/run-ml.sh",
+    "chain:anvil": "anvil --host 127.0.0.1 --port 8545",
+    "chain:deploy": "bash scripts/deploy-chain.sh",
+    "setup": "bash scripts/setup.sh",
+    "db:migrate": "npm run db:migrate -w services/api",
+    "db:push": "npm run db:push -w services/api",
+    "build": "npm run build -w services/api && npm run build -w apps/web",
+    "test:api": "npm run test -w services/api",
+    "test:ml": "bash scripts/test-ml.sh",
+    "test:contracts": "forge test -vv"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true
+  }
+}

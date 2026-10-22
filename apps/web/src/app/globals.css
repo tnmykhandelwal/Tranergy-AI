@@ -1,0 +1,317 @@
+@import "tailwindcss";
+
+@theme {
+  --color-slate-50: #f4f7fc;
+  --color-slate-100: #e9eff8;
+  --color-slate-200: #d4deef;
+  --color-slate-300: #b4c3de;
+  --color-slate-400: #8899bd;
+  --color-slate-500: #64789f;
+  --color-slate-600: #4a5c82;
+  --color-slate-700: #334563;
+  --color-slate-800: #1d2a44;
+  --color-slate-850: #16213a;
+  --color-slate-900: #101929;
+  --color-slate-950: #070c16;
+
+  --color-emerald-50: #ecfdf6;
+  --color-emerald-100: #d1fae8;
+  --color-emerald-200: #a8f3d4;
+  --color-emerald-300: #63edbc;
+  --color-emerald-400: #2ddfa6;
+  --color-emerald-500: #10c48d;
+  --color-emerald-600: #059a70;
+  --color-emerald-700: #067a5a;
+  --color-emerald-800: #07614a;
+  --color-emerald-900: #064e3b;
+  --color-emerald-950: #022c22;
+
+  --color-violet-400: #9d8bff;
+  --color-violet-500: #7c5cff;
+  --color-violet-600: #6a45f5;
+
+  --color-cyan-300: #67e8f9;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-500: #06b6d4;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas,
+    monospace;
+
+  --animate-rise: rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade-in: fade-in 0.5s ease-out both;
+  --animate-pop: pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-float: float 9s ease-in-out infinite;
+  --animate-float-slow: float 14s ease-in-out infinite;
+  --animate-slide-in: slide-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-gradient: gradient-shift 8s ease infinite;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(0, -22px, 0) scale(1.04);
+    }
+  }
+
+  @keyframes slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(-12px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  @keyframes gradient-shift {
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+}
+
+:root {
+  --app-bg: #070c16;
+  --app-text: #e9eff8;
+  --app-glow-a: rgba(124, 92, 255, 0.18);
+  --app-glow-b: rgba(45, 223, 166, 0.12);
+  --app-glow-c: rgba(34, 211, 238, 0.1);
+  --panel-overlay: rgba(16, 25, 41, 0.82);
+  --panel-border: rgba(51, 69, 99, 0.55);
+  --panel-shadow: 0 18px 50px -30px rgba(0, 0, 0, 0.95);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  /* Inverted slate scale: slate-950 is the light page, slate-50 is the darkest text. */
+  --color-slate-50: #020617;
+  --color-slate-100: #0f172a;
+  --color-slate-200: #1e293b;
+  --color-slate-300: #334155;
+  --color-slate-400: #475569;
+  --color-slate-500: #64748b;
+  --color-slate-600: #94a3b8;
+  --color-slate-700: #cbd5e4;
+  --color-slate-800: #e2e8f2;
+  --color-slate-850: #e8eef7;
+  --color-slate-900: #eef2f9;
+  --color-slate-950: #f7f9fc;
+
+  --color-emerald-300: #047857;
+  --color-emerald-400: #059669;
+  --color-emerald-500: #10b981;
+  --color-cyan-300: #0e7490;
+  --color-cyan-400: #0891b2;
+  --color-violet-300: #6d28d9;
+  --color-violet-400: #7c3aed;
+  --color-violet-500: #6d28d9;
+  --color-red-300: #b91c1c;
+  --color-red-400: #dc2626;
+  --color-amber-300: #b45309;
+  --color-amber-400: #d97706;
+  --color-orange-300: #c2410c;
+  --color-blue-300: #1d4ed8;
+  --color-indigo-400: #4338ca;
+  --color-pink-400: #be185d;
+
+  --app-bg: #f4f7fc;
+  --app-text: #0f172a;
+  --app-glow-a: rgba(124, 92, 255, 0.16);
+  --app-glow-b: rgba(16, 185, 129, 0.16);
+  --app-glow-c: rgba(6, 182, 212, 0.12);
+  --panel-overlay: rgba(255, 255, 255, 0.78);
+  --panel-border: rgba(148, 163, 184, 0.38);
+  --panel-shadow: 0 18px 40px -30px rgba(15, 23, 42, 0.45);
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--app-bg);
+  background-image:
+    radial-gradient(1100px 520px at 85% -12%, var(--app-glow-a), transparent 62%),
+    radial-gradient(900px 480px at -12% 8%, var(--app-glow-b), transparent 58%),
+    radial-gradient(700px 420px at 50% 110%, var(--app-glow-c), transparent 62%);
+  background-attachment: fixed;
+  color: var(--app-text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  transition: background-color 0.35s ease, color 0.35s ease;
+}
+
+::selection {
+  background-color: rgba(124, 92, 255, 0.35);
+  color: var(--app-text);
+}
+
+input[type="datetime-local"],
+input,
+select,
+textarea {
+  color-scheme: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-slate-700);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-slate-600);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@utility text-gradient {
+  background-image: linear-gradient(
+    100deg,
+    var(--color-emerald-300) 0%,
+    var(--color-cyan-400) 45%,
+    var(--color-violet-400) 100%
+  );
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gradient-shift 8s ease infinite;
+}
+
+@utility panel {
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--panel-overlay) 100%, transparent) 0%,
+    color-mix(in srgb, var(--panel-overlay) 72%, transparent) 100%
+  );
+  border-radius: 1rem;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.04) inset,
+    var(--panel-shadow);
+  backdrop-filter: blur(16px);
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.25s ease;
+}
+
+@utility panel-interactive {
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--panel-overlay) 100%, transparent) 0%,
+    color-mix(in srgb, var(--panel-overlay) 72%, transparent) 100%
+  );
+  border-radius: 1rem;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.04) inset,
+    var(--panel-shadow);
+  backdrop-filter: blur(16px);
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.25s ease;
+}
+.panel-interactive:hover {
+  border-color: color-mix(in srgb, var(--color-emerald-400) 45%, var(--panel-border));
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.06) inset,
+    0 22px 50px -30px rgba(16, 185, 129, 0.5);
+  transform: translateY(-2px);
+}
+
+@utility hairline {
+  border-color: var(--panel-border);
+}
+
+@utility glow-ring {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-emerald-400) 30%, transparent),
+    0 0 28px -8px color-mix(in srgb, var(--color-emerald-400) 45%, transparent);
+}
+
+@utility mesh-bg {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--color-slate-700) 35%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--color-slate-700) 35%, transparent) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(ellipse at center, black 0%, transparent 72%);
+}
+
+@utility skeleton {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-slate-800) 60%, transparent) 25%,
+    color-mix(in srgb, var(--color-slate-700) 45%, transparent) 50%,
+    color-mix(in srgb, var(--color-slate-800) 60%, transparent) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
