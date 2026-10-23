@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
 import {GreenRewardToken} from "../src/GreenRewardToken.sol";
+import {MockSettlementToken} from "../src/MockSettlementToken.sol";
 import {EnergyTrade} from "../src/EnergyTrade.sol";
 
 contract Deploy is Script {
@@ -10,7 +11,16 @@ contract Deploy is Script {
         vm.startBroadcast();
 
         GreenRewardToken token = new GreenRewardToken(msg.sender);
-        EnergyTrade energyTrade = new EnergyTrade(address(token));
+        MockSettlementToken settlement = new MockSettlementToken(msg.sender);
+
+        uint16 collateralRatioBps = uint16(vm.envOr("ESCROW_COLLATERAL_RATIO_BPS", uint256(10_000)));
+        uint64 gracePeriod = uint64(vm.envOr("ESCROW_DEFAULT_GRACE_PERIOD", uint256(1 days)));
+        EnergyTrade energyTrade = new EnergyTrade(
+            address(token),
+            address(settlement),
+            collateralRatioBps,
+            gracePeriod
+        );
 
         energyTrade.grantRole(energyTrade.OPERATOR_ROLE(), msg.sender);
         energyTrade.grantRole(energyTrade.ATTESTOR_ROLE(), msg.sender);
@@ -21,6 +31,7 @@ contract Deploy is Script {
         }
 
         token.grantRole(token.MINTER_ROLE(), address(energyTrade));
+        settlement.grantRole(settlement.MINTER_ROLE(), msg.sender);
 
         vm.stopBroadcast();
 
@@ -40,7 +51,17 @@ contract Deploy is Script {
             vm.toString(address(energyTrade)),
             '","greenRewardToken":"',
             vm.toString(address(token)),
-            '","deployer":"',
+            '","settlementToken":"',
+            vm.toString(address(settlement)),
+            '","settlementTokenSymbol":"',
+            settlement.symbol(),
+            '","settlementTokenDecimals":',
+            vm.toString(settlement.decimals()),
+            ',"collateralRatioBps":',
+            vm.toString(uint256(collateralRatioBps)),
+            ',"defaultGracePeriod":',
+            vm.toString(uint256(gracePeriod)),
+            ',"deployer":"',
             vm.toString(msg.sender),
             '","deployedAt":"',
             _toIso8601(block.timestamp),

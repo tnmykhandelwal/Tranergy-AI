@@ -44,6 +44,10 @@ export function conflict(message: string, code: ErrorCode = "CONFLICT"): ApiErro
   return new ApiError(409, code, message);
 }
 
+export function serviceUnavailable(message: string, code: ErrorCode = "CHAIN_ERROR"): ApiError {
+  return new ApiError(503, code, message);
+}
+
 export function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>,
 ): RequestHandler {

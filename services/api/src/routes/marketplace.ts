@@ -2,9 +2,11 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db";
 import { requireAuth, requireRole } from "../auth";
-import { asyncHandler, badRequest, conflict, forbidden, notFound } from "../errors";
+import { asyncHandler, badRequest, conflict, forbidden, notFound, serviceUnavailable } from "../errors";
 import { computeClaimOfferable } from "../services/offers";
 import * as chain from "../services/chain";
+import * as escrow from "../services/escrow";
+import { config } from "../config";
 
 export const marketplaceRouter = Router();
 
@@ -287,6 +289,15 @@ marketplaceRouter.post(
     if (parsed.data.intervalStart) filter.intervalStart = new Date(parsed.data.intervalStart);
     if (parsed.data.intervalEnd) filter.intervalEnd = new Date(parsed.data.intervalEnd);
 
+    const escrowIntended =
+      config.ESCROW_ENABLED && config.CHAIN_ENABLED && chain.isEscrowConfigured();
+    if (escrowIntended && !(await chain.isAvailable())) {
+      throw serviceUnavailable(
+        "Mutual escrow is enabled for this deployment, but the chain or operator wallet is unavailable. " +
+          "No trades were created because a trade must not be settleable off-chain when escrow is required.",
+      );
+    }
+
     const plan = await planMatches(filter);
     const createdTrades: Array<Record<string, unknown>> = [];
     const skipped: Array<{ offerId: string; requestId: string; reason: string }> = [];
@@ -339,6 +350,8 @@ marketplaceRouter.post(
 
         let chainTradeId: number | null = null;
         let chainTxHash: string | null = null;
+        let escrowEnabled = false;
+        let escrowError: string | null = null;
         try {
           if (await chain.isAvailable()) {
             const offer = await prisma.energyOffer.findUniqueOrThrow({
@@ -351,24 +364,55 @@ marketplaceRouter.post(
             });
             const producerAddress = offer.facility.owner.walletAddress ?? chain.userAddressFromId(offer.facility.ownerId);
             const consumerAddress = request.buyer.walletAddress ?? chain.userAddressFromId(request.buyerId);
-            const onChain = await chain.createTradeOnChain(
-              trade.id,
-              producerAddress,
-              consumerAddress,
-              match.agreedKwh,
-              match.pricePerKwh,
-            );
-            chainTradeId = onChain.chainTradeId;
-            chainTxHash = onChain.txHash;
-            if (chainTradeId !== null || chainTxHash !== null) {
-              await prisma.trade.update({
-                where: { id: trade.id },
-                data: { chainTradeId, chainTxHash },
-              });
+
+            if (escrowIntended) {
+              try {
+                const escrowed = await escrow.createEscrowForTrade({
+                  trade,
+                  producerAddress,
+                  consumerAddress,
+                  intervalEnd: match.intervalEnd,
+                });
+                if (escrowed) {
+                  chainTradeId = escrowed.chainTradeId;
+                  chainTxHash = escrowed.chainTxHash;
+                  escrowEnabled = true;
+                } else {
+                  throw new Error("escrow configuration became unavailable");
+                }
+              } catch (err) {
+                escrowError = err instanceof Error ? err.message : String(err);
+                console.warn(`[escrow] registration failed for trade ${trade.id}:`, err);
+                await prisma.trade.update({
+                  where: { id: trade.id },
+                  data: {
+                    escrowRequired: true,
+                    escrowState: "UNAVAILABLE",
+                    state: "REVIEW_REQUIRED",
+                  },
+                });
+              }
+            } else {
+              const onChain = await chain.createTradeOnChain(
+                trade.id,
+                producerAddress,
+                consumerAddress,
+                match.agreedKwh,
+                match.pricePerKwh,
+              );
+              chainTradeId = onChain.chainTradeId;
+              chainTxHash = onChain.txHash;
+              if (chainTradeId !== null || chainTxHash !== null) {
+                await prisma.trade.update({
+                  where: { id: trade.id },
+                  data: { chainTradeId, chainTxHash },
+                });
+              }
             }
           }
         } catch (err) {
-          console.warn(`[chain] createTradeOnChain failed for trade ${trade.id}:`, err);
+          console.warn(`[chain] trade registration failed for trade ${trade.id}:`, err);
+          escrowError = err instanceof Error ? err.message : String(err);
         }
 
         createdTrades.push({
@@ -377,9 +421,11 @@ marketplaceRouter.post(
           requestId: trade.requestId,
           agreedKwh: trade.agreedKwh,
           pricePerKwh: trade.pricePerKwh,
-          state: trade.state,
+          state: escrowError ? "REVIEW_REQUIRED" : trade.state,
           chainTradeId,
           chainTxHash,
+          escrowEnabled,
+          escrowError,
         });
       } catch (err) {
         if (err instanceof Error && err.message === "REQUEST_RESERVATION_FAILED") {

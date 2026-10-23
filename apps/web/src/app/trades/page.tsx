@@ -4,17 +4,28 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   attestTrade,
+  cancelEscrow,
   disputeTrade,
+  getChainStatus,
   getReceipt,
   getTrades,
+  postEscrowDeposit,
+  postEscrowDispute,
   postEvidence,
+  postPartialSettlement,
+  postResolveDefault,
+  postResolveDispute,
   type AttestResult,
+  type EscrowDepositKind,
+  type EscrowDisputeOutcome,
+  type EscrowView,
   type EvidenceResult,
   type Trade,
 } from "@/lib/api";
 import { useAsyncData } from "@/lib/useAsyncData";
 import { canDecideCases, useSession } from "@/lib/session";
 import { formatKwh, formatNum, formatPrice, formatTs, formatWei, shortHex } from "@/lib/format";
+import { depositEscrow, raiseEscrowDisputeOnChain } from "@/lib/escrow";
 import { ApiBanner } from "@/components/ApiBanner";
 import { Badge } from "@/components/Badge";
 import { DataTable, type Column } from "@/components/DataTable";
@@ -66,6 +77,106 @@ function KeyValue({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
+function formatUnits(value: string | null | undefined, decimals: number): string {
+  if (value === null || value === undefined || value === "") return "0";
+  try {
+    const raw = BigInt(value);
+    const scale = 10n ** BigInt(decimals);
+    const whole = raw / scale;
+    const frac = (raw % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+    return frac ? `${whole.toString()}.${frac}` : whole.toString();
+  } catch {
+    return value;
+  }
+}
+
+function EscrowDepositRow({
+  label,
+  deposit,
+  decimals,
+  symbol,
+}: {
+  label: string;
+  deposit: EscrowView["deposits"]["consumerPayment"];
+  decimals: number;
+  symbol: string;
+}) {
+  return (
+    <div className="rounded border border-slate-800/70 px-2 py-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-slate-300">{label}</span>
+        <Badge label={deposit.confirmed ? "funded" : "outstanding"} status={deposit.confirmed ? "VERIFIED" : "PENDING"} />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+        <span>
+          {formatUnits(deposit.fundedUnits, decimals)} / {formatUnits(deposit.requiredUnits, decimals)} {symbol}
+        </span>
+        <CopyableHex value={deposit.txHash} />
+      </div>
+    </div>
+  );
+}
+
+function EscrowSection({ escrow }: { escrow: EscrowView }) {
+  const decimals = escrow.settlementToken?.decimals ?? 6;
+  const symbol = escrow.settlementToken?.symbol ?? "TSTR";
+  const settlement = escrow.settlement;
+  return (
+    <Section title={`Mutual escrow · ${symbol}`}>
+      <KeyValue k="state" v={<Badge label={escrow.escrowState} status={escrow.escrowState} />} />
+      <KeyValue k="token" v={<CopyableHex value={escrow.settlementToken?.address} />} />
+      <KeyValue
+        k="trade value"
+        v={<span className="tabular-nums">{formatUnits(escrow.tradeValueUnits, decimals)} {symbol}</span>}
+      />
+      <KeyValue
+        k="funding"
+        v={
+          <span className="tabular-nums">
+            {formatUnits(escrow.totals.fundedUnits, decimals)} / {formatUnits(escrow.totals.requiredUnits, decimals)} {symbol} ({formatNum(escrow.totals.fundingPct, 1)}%)
+          </span>
+        }
+      />
+      <KeyValue k="collateral ratio" v={`${((escrow.collateralRatioBps ?? 0) / 100).toFixed(2)}%`} />
+      <div className="mt-2 grid gap-1.5 md:grid-cols-3">
+        <EscrowDepositRow label="Consumer payment" deposit={escrow.deposits.consumerPayment} decimals={decimals} symbol={symbol} />
+        <EscrowDepositRow label="Consumer collateral" deposit={escrow.deposits.consumerCollateral} decimals={decimals} symbol={symbol} />
+        <EscrowDepositRow label="Producer collateral" deposit={escrow.deposits.producerCollateral} decimals={decimals} symbol={symbol} />
+      </div>
+      <div className="mt-2 grid gap-1 md:grid-cols-2">
+        <div>
+          <KeyValue k="funding deadline" v={formatTs(escrow.deadlines.fundingDeadline)} />
+          <KeyValue k="delivery deadline" v={formatTs(escrow.deadlines.deliveryDeadline)} />
+          <KeyValue k="grace period" v={escrow.deadlines.gracePeriodSeconds ? `${escrow.deadlines.gracePeriodSeconds}s` : "—"} />
+        </div>
+        <div>
+          <KeyValue k="delivered" v={escrow.verification.deliveredKwh !== null && escrow.verification.deliveredKwh !== undefined ? formatKwh(escrow.verification.deliveredKwh) : "—"} />
+          <KeyValue k="outcome" v={settlement.outcome ?? "—"} />
+          <KeyValue k="final settlement tx" v={<CopyableHex value={settlement.finalSettlementTxHash} />} />
+        </div>
+      </div>
+      {settlement.outcome ? (
+        <div className="mt-2 rounded border border-slate-800/70 px-2 py-1.5 text-[11px] text-slate-300">
+          <div className="flex justify-between"><span className="text-slate-500">paid to producer</span><span className="tabular-nums">{formatUnits(settlement.paymentToProducerUnits, decimals)} {symbol}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">consumer refund</span><span className="tabular-nums">{formatUnits(settlement.paymentRefundedUnits, decimals)} {symbol}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">producer collateral returned</span><span className="tabular-nums">{formatUnits(settlement.producerCollateralReturnedUnits, decimals)} {symbol}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">producer collateral slashed</span><span className="tabular-nums">{formatUnits(settlement.producerCollateralSlashedUnits, decimals)} {symbol}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">consumer collateral returned</span><span className="tabular-nums">{formatUnits(settlement.consumerCollateralReturnedUnits, decimals)} {symbol}</span></div>
+        </div>
+      ) : null}
+      {escrow.dispute.reason ? (
+        <div className="mt-2 rounded border border-red-900/50 bg-red-950/20 px-2 py-1.5 text-[11px] text-red-200">
+          <div>dispute: {escrow.dispute.reason}</div>
+          {escrow.dispute.resolutionOutcome ? (
+            <div>resolution: {escrow.dispute.resolutionOutcome} — {escrow.dispute.resolutionReason ?? "—"}</div>
+          ) : null}
+          <CopyableHex value={escrow.dispute.txHash} />
+        </div>
+      ) : null}
+    </Section>
+  );
+}
+
 function TradeDetailModal({
   tradeId,
   onClose,
@@ -75,13 +186,16 @@ function TradeDetailModal({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const { role } = useSession();
+  const { role, walletAddress } = useSession();
   const mayDecide = canDecideCases(role);
   const receipt = useAsyncData(
     () => (tradeId ? getReceipt(tradeId) : Promise.resolve(null)),
     [tradeId],
   );
-  const [action, setAction] = useState<"none" | "evidence" | "dispute">("none");
+  const chain = useAsyncData(() => getChainStatus(), []);
+  const [action, setAction] = useState<
+    "none" | "evidence" | "dispute" | "partial" | "default" | "resolve" | "escrowDispute"
+  >("none");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ tone: "success" | "error"; title: string; body: string } | null>(null);
   const [producerExport, setProducerExport] = useState("");
@@ -89,6 +203,12 @@ function TradeDetailModal({
   const [notes, setNotes] = useState("");
   const [refs, setRefs] = useState("");
   const [disputeReason, setDisputeReason] = useState("");
+  const [deliveredKwh, setDeliveredKwh] = useState("");
+  const [resolveOutcome, setResolveOutcome] = useState<EscrowDisputeOutcome>("full_delivery");
+  const [resolveReason, setResolveReason] = useState("");
+  const [evidenceHash, setEvidenceHash] = useState("");
+  const [pendingDeposit, setPendingDeposit] = useState<{ kind: EscrowDepositKind; txHash: string } | null>(null);
+  const [pendingDispute, setPendingDispute] = useState<{ reason: string; txHash: string } | null>(null);
 
   const tradeState = receipt.data?.trade?.state;
   const resetAction = useCallback(() => {
@@ -98,6 +218,12 @@ function TradeDetailModal({
     setNotes("");
     setRefs("");
     setDisputeReason("");
+    setDeliveredKwh("");
+    setResolveReason("");
+    setEvidenceHash("");
+    setResolveOutcome("full_delivery");
+    setPendingDeposit(null);
+    setPendingDispute(null);
   }, []);
 
   useEffect(() => {
@@ -191,6 +317,289 @@ function TradeDetailModal({
     }
   };
 
+  const escrow = receipt.data?.escrow ?? null;
+  const escrowAddresses = chain.data?.contracts ?? null;
+  const fundingDeadlinePassed = escrow?.deadlines.fundingDeadline
+    ? Date.now() > new Date(escrow.deadlines.fundingDeadline).getTime()
+    : false;
+  const defaultWindowClosed = escrow?.deadlines.deliveryDeadline
+    ? Date.now() >
+      new Date(escrow.deadlines.deliveryDeadline).getTime() +
+        (escrow.deadlines.gracePeriodSeconds ?? 0) * 1000
+    : false;
+
+  const runEscrowDeposit = async (kind: EscrowDepositKind) => {
+    if (!tradeId || !escrow || escrow.chainTradeId === null || escrow.chainTradeId === undefined) return;
+    if (!escrowAddresses?.energyTrade || !escrowAddresses.settlementToken) {
+      toast("Escrow contract addresses are unavailable — deploy and configure the chain first.", "error");
+      return;
+    }
+    const key =
+      kind === "consumer_payment"
+        ? escrow.deposits.consumerPayment
+        : kind === "consumer_collateral"
+          ? escrow.deposits.consumerCollateral
+          : escrow.deposits.producerCollateral;
+    if (key.confirmed) {
+      toast("This escrow deposit is already funded.", "info");
+      return;
+    }
+    setBusy(true);
+    try {
+      const txHash = await depositEscrow(
+        {
+          energyTrade: escrowAddresses.energyTrade,
+          settlementToken: escrowAddresses.settlementToken,
+        },
+        escrow.chainTradeId,
+        kind,
+        key.requiredUnits,
+      );
+      try {
+        const res = await postEscrowDeposit(tradeId, kind, txHash);
+        setPendingDeposit(null);
+        setResult({
+          tone: "success",
+          title: "Escrow deposit confirmed",
+          body: `tx ${txHash} · escrow ${res.escrow?.escrowState ?? res.trade.escrowState ?? "updated"}`,
+        });
+      } catch (err) {
+        setPendingDeposit({ kind, txHash });
+        setResult({
+          tone: "error",
+          title: "Deposit sent but not recorded",
+          body: `tx ${txHash} succeeded on-chain. API recording failed: ${
+            err instanceof Error ? err.message : String(err)
+          }. Use “Record confirmed deposit” to retry verification — do not send a second deposit.`,
+        });
+      }
+      toast("Escrow deposit submitted", "success");
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Escrow deposit failed", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const raiseEscrowDispute = async () => {
+    if (!tradeId || !escrow || escrow.chainTradeId === null || escrow.chainTradeId === undefined) return;
+    if (!disputeReason.trim()) {
+      toast("A dispute reason is required.", "error");
+      return;
+    }
+    if (!escrowAddresses?.energyTrade) {
+      toast("Escrow contract address is unavailable.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const txHash = await raiseEscrowDisputeOnChain(
+        { energyTrade: escrowAddresses.energyTrade },
+        escrow.chainTradeId,
+        disputeReason.trim(),
+      );
+      setPendingDispute({ reason: disputeReason.trim(), txHash });
+      const res = await postEscrowDispute(tradeId, disputeReason.trim(), txHash);
+      setPendingDispute(null);
+      setResult({
+        tone: "success",
+        title: "Dispute raised on-chain",
+        body: `tx ${txHash} · state ${res.trade.state}`,
+      });
+      toast("Escrow dispute raised", "success");
+      resetAction();
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("on-chain dispute failed")) {
+        setResult({ tone: "error", title: "Dispute failed", body: msg });
+      } else {
+        if (!pendingDispute) {
+          const maybeTx = msg.match(/0x[0-9a-fA-F]{64}/)?.[0];
+          if (maybeTx) setPendingDispute({ reason: disputeReason.trim(), txHash: maybeTx });
+        }
+        setResult({
+          tone: "error",
+          title: "Dispute raised but not recorded",
+          body: `${msg}. Use “Record confirmed dispute” to retry verification.`,
+        });
+      }
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recordPendingDeposit = async () => {
+    if (!tradeId || !pendingDeposit) return;
+    setBusy(true);
+    try {
+      const res = await postEscrowDeposit(tradeId, pendingDeposit.kind, pendingDeposit.txHash);
+      setPendingDeposit(null);
+      setResult({
+        tone: "success",
+        title: "Deposit recorded",
+        body: `tx ${pendingDeposit.txHash} · escrow ${res.escrow?.escrowState ?? "updated"}`,
+      });
+      toast("Escrow deposit recorded", "success");
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Recording still failing", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recordPendingDispute = async () => {
+    if (!tradeId || !pendingDispute) return;
+    setBusy(true);
+    try {
+      const res = await postEscrowDispute(tradeId, pendingDispute.reason, pendingDispute.txHash);
+      const txHash = pendingDispute.txHash;
+      setPendingDispute(null);
+      setResult({
+        tone: "success",
+        title: "Dispute recorded",
+        body: `tx ${txHash} · state ${res.trade.state}`,
+      });
+      toast("Escrow dispute recorded", "success");
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Recording still failing", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelExpired = async () => {
+    if (!tradeId) return;
+    setBusy(true);
+    try {
+      const res = await cancelEscrow(tradeId);
+      setResult({
+        tone: "success",
+        title: "Escrow cancelled and refunded",
+        body: `outcome ${res.escrow?.settlement.outcome ?? "CANCELLED"} · settlement tx ${
+          res.settlementTxHash ?? "—"
+        }`,
+      });
+      toast("Escrow cancelled", "success");
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Cancellation failed", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const settlePartial = async () => {
+    if (!tradeId) return;
+    const delivered = Number(deliveredKwh);
+    if (!Number.isFinite(delivered) || delivered <= 0) {
+      toast("Enter the verified delivered kWh.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await postPartialSettlement(tradeId, delivered);
+      setResult({
+        tone: "success",
+        title: "Partial delivery settled",
+        body: `trade ${res.trade.state} · paid ${res.escrow?.settlement.paymentToProducer ?? "—"} ${
+          res.escrow?.settlementToken.symbol ?? ""
+        } · tx ${res.settlementTxHash ?? "—"}`,
+      });
+      toast("Partial delivery settled", "success");
+      resetAction();
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Partial settlement failed", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const settleDefault = async () => {
+    if (!tradeId) return;
+    setBusy(true);
+    try {
+      const res = await postResolveDefault(tradeId, resolveReason.trim() || "verified non-delivery");
+      setResult({
+        tone: "success",
+        title: "Producer default resolved",
+        body: `slashed ${res.escrow?.settlement.producerCollateralSlashed ?? "—"} ${
+          res.escrow?.settlementToken.symbol ?? ""
+        } · tx ${res.settlementTxHash ?? "—"}`,
+      });
+      toast("Producer default resolved", "success");
+      resetAction();
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Default resolution failed", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resolveDispute = async () => {
+    if (!tradeId) return;
+    if (!resolveReason.trim()) {
+      toast("A resolution reason is required.", "error");
+      return;
+    }
+    const delivered = resolveOutcome === "partial_delivery" ? Number(deliveredKwh) : undefined;
+    if (resolveOutcome === "partial_delivery" && (!Number.isFinite(delivered) || (delivered ?? 0) <= 0)) {
+      toast("Enter the verified delivered kWh for a partial outcome.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await postResolveDispute(tradeId, {
+        outcome: resolveOutcome,
+        reason: resolveReason.trim(),
+        ...(delivered ? { deliveredKwh: delivered } : {}),
+        ...(evidenceHash.trim() ? { evidenceHash: evidenceHash.trim() } : {}),
+      });
+      setResult({
+        tone: "success",
+        title: "Dispute resolved",
+        body: `outcome ${res.escrow?.settlement.outcome ?? "—"} · trade ${res.trade.state} · tx ${
+          res.settlementTxHash ?? "—"
+        }`,
+      });
+      toast("Dispute resolved", "success");
+      resetAction();
+      receipt.reload();
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ tone: "error", title: "Dispute resolution failed", body: msg });
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const r = receipt.data;
 
   return (
@@ -220,6 +629,8 @@ function TradeDetailModal({
               <KeyValue k="buyer" v={r.request.buyerId} />
             </Section>
           </div>
+
+          {escrow ? <EscrowSection escrow={escrow} /> : null}
 
           <Section title="Evidence">
             {r.evidence ? (
@@ -287,19 +698,117 @@ function TradeDetailModal({
           </div>
 
           {result ? <Callout tone={result.tone} title={result.title}>{result.body}</Callout> : null}
+          {pendingDeposit ? (
+            <button type="button" onClick={recordPendingDeposit} disabled={busy} className={buttonSecondary}>
+              {busy ? <Spinner /> : null} Record confirmed deposit
+            </button>
+          ) : null}
+          {pendingDispute ? (
+            <button type="button" onClick={recordPendingDispute} disabled={busy} className={buttonSecondary}>
+              {busy ? <Spinner /> : null} Record confirmed dispute
+            </button>
+          ) : null}
 
           <div className="border-t border-slate-800 pt-3">
-            {!mayDecide ? (
+            {!mayDecide && !escrow ? (
               <p className="mb-2 text-xs text-slate-500">
                 Attest / dispute require the verifier or admin role — switch the acting user (top right).
               </p>
             ) : null}
+            {escrow && !walletAddress ? (
+              <p className="mb-2 text-xs text-amber-300">
+                Sign in with a wallet to make escrow deposits or raise a participant dispute.
+              </p>
+            ) : null}
             <div className="flex flex-wrap gap-2">
-              {tradeState === "EVIDENCE_SUBMITTED" ? (
+              {escrow && !fundingDeadlinePassed && tradeState === "MATCHED" && role === "consumer" ? (
+                <>
+                  {!escrow.deposits.consumerPayment.confirmed ? (
+                    <button
+                      type="button"
+                      onClick={() => runEscrowDeposit("consumer_payment")}
+                      disabled={busy}
+                      className={buttonPrimary}
+                    >
+                      {busy ? <Spinner /> : null} Deposit payment
+                    </button>
+                  ) : null}
+                  {!escrow.deposits.consumerCollateral.confirmed ? (
+                    <button
+                      type="button"
+                      onClick={() => runEscrowDeposit("consumer_collateral")}
+                      disabled={busy}
+                      className={buttonPrimary}
+                    >
+                      {busy ? <Spinner /> : null} Deposit consumer collateral
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+              {escrow && !fundingDeadlinePassed && tradeState === "MATCHED" && role === "producer" ? (
+                !escrow.deposits.producerCollateral.confirmed ? (
+                  <button
+                    type="button"
+                    onClick={() => runEscrowDeposit("producer_collateral")}
+                    disabled={busy}
+                    className={buttonPrimary}
+                  >
+                    {busy ? <Spinner /> : null} Deposit producer collateral
+                  </button>
+                ) : null
+              ) : null}
+              {escrow && tradeState === "MATCHED" && fundingDeadlinePassed ? (
+                <button type="button" onClick={cancelExpired} disabled={busy} className={buttonDanger}>
+                  {busy ? <Spinner /> : null} Cancel expired escrow &amp; refund
+                </button>
+              ) : null}
+              {(tradeState === "MATCHED" || tradeState === "REVIEW_REQUIRED" || tradeState === "DELIVERY_ACTIVE") && !escrow ? (
+                <button
+                  type="button"
+                  onClick={() => setAction(action === "evidence" ? "none" : "evidence")}
+                  disabled={busy}
+                  className={buttonSecondary}
+                >
+                  Submit delivery evidence
+                </button>
+              ) : null}
+              {escrow && tradeState === "DELIVERY_ACTIVE" ? (
+                <button
+                  type="button"
+                  onClick={() => setAction(action === "evidence" ? "none" : "evidence")}
+                  disabled={busy}
+                  className={buttonSecondary}
+                >
+                  Submit delivery evidence
+                </button>
+              ) : null}
+              {mayDecide && tradeState === "EVIDENCE_SUBMITTED" ? (
                 <>
                   <button type="button" onClick={attest} disabled={busy} className={buttonPrimary}>
                     {busy ? <Spinner /> : null} Attest &amp; settle
                   </button>
+                  {escrow ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setAction(action === "partial" ? "none" : "partial")}
+                        disabled={busy}
+                        className={buttonSecondary}
+                      >
+                        Partial delivery
+                      </button>
+                      {defaultWindowClosed ? (
+                        <button
+                          type="button"
+                          onClick={() => setAction(action === "default" ? "none" : "default")}
+                          disabled={busy}
+                          className={buttonDanger}
+                        >
+                          Resolve producer default
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setAction(action === "dispute" ? "none" : "dispute")}
@@ -310,21 +819,59 @@ function TradeDetailModal({
                   </button>
                 </>
               ) : null}
-              {tradeState === "MATCHED" || tradeState === "REVIEW_REQUIRED" ? (
+              {escrow &&
+              (role === "producer" || role === "consumer") &&
+              (tradeState === "DELIVERY_ACTIVE" || tradeState === "EVIDENCE_SUBMITTED") &&
+              walletAddress ? (
                 <button
                   type="button"
-                  onClick={() => setAction(action === "evidence" ? "none" : "evidence")}
+                  onClick={() => setAction(action === "escrowDispute" ? "none" : "escrowDispute")}
                   disabled={busy}
-                  className={buttonSecondary}
+                  className={buttonDanger}
                 >
-                  Submit delivery evidence
+                  Raise on-chain dispute
                 </button>
               ) : null}
-              {tradeState === "DISPUTED" ? (
-                <p className="text-xs text-red-300">Trade is disputed — no further actions are available.</p>
+              {mayDecide && escrow && tradeState === "DELIVERY_ACTIVE" && defaultWindowClosed ? (
+                <button
+                  type="button"
+                  onClick={() => setAction(action === "default" ? "none" : "default")}
+                  disabled={busy}
+                  className={buttonDanger}
+                >
+                  Resolve producer default
+                </button>
+              ) : null}
+              {mayDecide && escrow && tradeState === "DISPUTED" ? (
+                <button
+                  type="button"
+                  onClick={() => setAction(action === "resolve" ? "none" : "resolve")}
+                  disabled={busy}
+                  className={buttonPrimary}
+                >
+                  Resolve dispute
+                </button>
+              ) : null}
+              {tradeState === "DISPUTED" && !mayDecide ? (
+                <p className="text-xs text-red-300">
+                  Trade is disputed — a verifier must resolve it; funds stay locked until then.
+                </p>
               ) : null}
               {tradeState === "SETTLED" ? (
                 <p className="text-xs text-emerald-300">Trade settled — receipt above is final.</p>
+              ) : null}
+              {tradeState === "PARTIALLY_SETTLED" ? (
+                <p className="text-xs text-amber-300">
+                  Partially settled — payment reflects verified delivery; slashed collateral covers the shortfall.
+                </p>
+              ) : null}
+              {tradeState === "DEFAULTED" ? (
+                <p className="text-xs text-red-300">
+                  Producer default — consumer refunded and producer collateral slashed.
+                </p>
+              ) : null}
+              {tradeState === "CANCELLED" ? (
+                <p className="text-xs text-slate-400">Escrow cancelled before funding completed — deposits refunded.</p>
               ) : null}
             </div>
 
@@ -392,6 +939,110 @@ function TradeDetailModal({
                 </button>
               </div>
             ) : null}
+
+            {action === "escrowDispute" ? (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <div>
+                  <FieldLabel>Dispute reason (signed by your wallet)</FieldLabel>
+                  <input
+                    value={disputeReason}
+                    onChange={(e) => setDisputeReason(e.target.value)}
+                    placeholder="delivered energy does not match the agreed interval"
+                    className={inputClass}
+                  />
+                </div>
+                <button type="button" onClick={raiseEscrowDispute} disabled={busy} className={buttonDanger}>
+                  {busy ? <Spinner /> : null} Sign &amp; raise dispute
+                </button>
+              </div>
+            ) : null}
+
+            {action === "partial" ? (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <div>
+                  <FieldLabel>Verified delivered energy (kWh)</FieldLabel>
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={deliveredKwh}
+                    onChange={(e) => setDeliveredKwh(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+                <button type="button" onClick={settlePartial} disabled={busy} className={buttonPrimary}>
+                  {busy ? <Spinner /> : null} Settle partial delivery
+                </button>
+              </div>
+            ) : null}
+
+            {action === "default" ? (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <div>
+                  <FieldLabel>Evidence note for the default determination</FieldLabel>
+                  <input
+                    value={resolveReason}
+                    onChange={(e) => setResolveReason(e.target.value)}
+                    placeholder="no delivery recorded after the deadline and grace period"
+                    className={inputClass}
+                  />
+                </div>
+                <button type="button" onClick={settleDefault} disabled={busy} className={buttonDanger}>
+                  {busy ? <Spinner /> : null} Resolve producer default
+                </button>
+              </div>
+            ) : null}
+
+            {action === "resolve" ? (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <FieldLabel>Outcome</FieldLabel>
+                    <select
+                      value={resolveOutcome}
+                      onChange={(e) => setResolveOutcome(e.target.value as EscrowDisputeOutcome)}
+                      className={inputClass}
+                    >
+                      <option value="full_delivery">Full delivery</option>
+                      <option value="partial_delivery">Partial delivery</option>
+                      <option value="producer_default">Producer default</option>
+                    </select>
+                  </div>
+                  {resolveOutcome === "partial_delivery" ? (
+                    <div>
+                      <FieldLabel>Verified delivered energy (kWh)</FieldLabel>
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={deliveredKwh}
+                        onChange={(e) => setDeliveredKwh(e.target.value)}
+                        className={inputClass}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <div>
+                  <FieldLabel>Resolution reason</FieldLabel>
+                  <input
+                    value={resolveReason}
+                    onChange={(e) => setResolveReason(e.target.value)}
+                    placeholder="evidence and meter reconciliation outcome"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>Resolution evidence hash (optional)</FieldLabel>
+                  <input
+                    value={evidenceHash}
+                    onChange={(e) => setEvidenceHash(e.target.value)}
+                    placeholder="0x… (any text is hashed)"
+                    className={`${inputClass} font-mono text-xs`}
+                  />
+                </div>
+                <button type="button" onClick={resolveDispute} disabled={busy} className={buttonPrimary}>
+                  {busy ? <Spinner /> : null} Resolve dispute
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -431,6 +1082,16 @@ function TradesContent() {
   const columns: Column<Trade>[] = [
     { key: "id", header: "Trade", render: (t) => <span className="font-mono text-xs text-emerald-300">{t.id}</span> },
     { key: "state", header: "State", render: (t) => <Badge label={t.state} status={t.state} /> },
+    {
+      key: "escrow",
+      header: "Escrow",
+      render: (t) =>
+        t.escrowEnabled ? (
+          <Badge label={t.escrowState ?? "—"} status={t.escrowState ?? undefined} />
+        ) : (
+          <span className="text-slate-600">off-chain</span>
+        ),
+    },
     { key: "kwh", header: "Agreed", align: "right", render: (t) => formatKwh(t.agreedKwh) },
     { key: "price", header: "Price", align: "right", render: (t) => formatPrice(t.pricePerKwh) },
     {

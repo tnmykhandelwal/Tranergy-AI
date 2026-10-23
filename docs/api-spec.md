@@ -331,6 +331,54 @@ State → `DISPUTED` (from `MATCHED`/`EVIDENCE_SUBMITTED`/`REVIEW_REQUIRED`). If
 
 ---
 
+## 6.1 Mutual-stake escrow
+
+Escrow is **intended** when `CHAIN_ENABLED=true`, `ESCROW_ENABLED=true`, and the deployment JSON contains `settlementToken` + `settlementTokenDecimals`. When intended, matching refuses to create trades if the chain/operator is unavailable; when registration fails mid-run, the trade is kept with `escrowRequired=true`, `escrowState="UNAVAILABLE"` and state `REVIEW_REQUIRED`, and settlement endpoints return `503 CHAIN_ERROR` until reconciling. When escrow is not intended (e.g. `CHAIN_ENABLED=false` in the test suite), the legacy single-tx path remains.
+
+All token amounts are integer base-unit strings. `TSTR` uses 6 decimals; a display amount is `units / 10^decimals`. `quantityKwhMilli` has 3 decimals; `tradeValue = quantityKwhMilli * pricePerKwhUnits / 1000` (floor). `consumerPayment = tradeValue`; consumer and producer collateral = `tradeValue * collateralRatioBps / 10_000` (snapshot, default 100%). Deadlines: `fundingDeadline = now + ESCROW_FUNDING_WINDOW_MINUTES`; `deliveryDeadline = max(offer.intervalEnd, fundingDeadline + ESCROW_DELIVERY_WINDOW_MINUTES)`.
+
+### Trade JSON additions
+Every trade object may include: `escrowEnabled`, `escrowRequired`, `escrowState`, `settlementToken`, `settlementTokenSymbol`, `settlementTokenDecimals`, `tradeValueUnits`, `consumerPaymentUnits`, `consumerCollateralUnits`, `producerCollateralUnits`, `consumerPaymentFundedUnits`, `consumerCollateralFundedUnits`, `producerCollateralFundedUnits`, `fundingDeadline`, `deliveryDeadline`, `settlementOutcome`, `verifiedDeliveredKwh`.
+
+### `GET /api/trades/:id` (public)
+Returns the trade, `escrow` summary (if enabled), evidence bundles, rewards. Live escrow trades are reconciled from the chain before responding.
+
+### `GET /api/trades/:id/escrow` (public)
+Returns `{ trade, escrow, chain: { enabled, readable, writable } }`. Reconciles from chain when readable.
+
+### `POST /api/trades/:id/escrow/sync` (auth: participant/verifier/admin/coordinator)
+Reads the chain and applies the escrow snapshot to the DB. Requires a readable chain; `503 CHAIN_ERROR` otherwise.
+
+### `POST /api/trades/:id/escrow/deposits` (auth: assigned participant)
+Body `{ "kind": "consumer_payment" | "consumer_collateral" | "producer_collateral", "txHash": "0x…" }`.
+The caller must be the consumer for consumer kinds and the producer for producer collateral, and the signed-in user must have a wallet address. The API confirms the receipt, checks the `EscrowDeposited` event (`tradeId`, payer, kind, exact amount), then records the per-kind tx hash and reconciles. The last deposit that activates the escrow stores `fundingActivationTxHash`. Idempotent when the same tx hash is retried; a different tx for an already-recorded kind is `409`.
+
+### `POST /api/trades/:id/escrow/dispute` (auth: assigned participant)
+Body `{ "reason": "…", "txHash": "0x…" }`. The participant must have signed `raiseDispute(chainTradeId, keccak256(reason))`. The API verifies the `EscrowDisputeRaised` event (sender + reason hash), then sets `DISPUTED`. Allowed from `DELIVERY_ACTIVE`/`EVIDENCE_SUBMITTED`.
+
+### `POST /api/trades/:id/escrow/cancel` (auth: participant/verifier/admin)
+Only for an unfunded `MATCHED` escrow after `fundingDeadline`. The operator calls `cancelExpiredEscrow`; the contract refunds consumer payment + consumer collateral to the consumer and producer collateral to the producer. Idempotent for an already `CANCELLED` trade.
+
+### `POST /api/trades/:id/partial-settlement` (auth: verifier/admin)
+Body `{ "deliveredKwh": 17.5, "note": "…" }`, requires `EVIDENCE_SUBMITTED`, `0 < deliveredKwh < agreedKwh`. Calls `attestPartialDelivery(chainTradeId, deliveredKwhMilli)`. Outcome `PARTIAL_DELIVERY`: producer receives `payment * delivered / agreed` (floor), consumer is refunded the remainder, producer collateral is slashed by the same shortfall ratio (up to the collateral), both collaterals are returned in the remainder, and a partial-delivery reward is created for `deliveredKwh`.
+
+### `POST /api/trades/:id/resolve-default` (auth: verifier/admin)
+Body `{ "reason": "…", "evidenceHash": "0x…" | "text" }`. Allowed from `DELIVERY_ACTIVE`/`EVIDENCE_SUBMITTED`/`DISPUTED` only after `deliveryDeadline + gracePeriod`. Calls `resolveProducerDefault`; outcome `PRODUCER_DEFAULT`: consumer is refunded payment + consumer collateral, producer collateral is slashed to the consumer, no reward is minted.
+
+### `POST /api/trades/:id/disputes/resolve` (auth: verifier/admin)
+Body `{ "outcome": "full_delivery" | "partial_delivery" | "producer_default", "deliveredKwh": 17.5?, "reason": "…", "evidenceHash": "0x…" | "text"? }`. Calls `resolveDispute` and applies the corresponding settlement, without arbitrary transfers.
+
+### `POST /api/trades/:id/attest` (auth: verifier/admin) — escrow behavior
+For escrow trades: reads `getEscrow`. If already resolved, returns the synced trade (`alreadySettled: true` for full delivery) or `409` for another outcome. If `EVIDENCE_SUBMITTED`, calls `attestAndSettle`; success is recorded only when the contract reports `FullDelivery`, else `503` and the DB is left unchanged. Full settlement pays the producer and returns both collaterals; a `verified-delivery` reward is created once (deduped by reason). Legacy chain-disabled trades keep the old off-chain `SETTLED` behavior and `chainDisabled: true`.
+
+### `POST /api/trades/:id/evidence` (auth: producer/verifier/admin) — escrow behavior
+Escrow evidence requires `DELIVERY_ACTIVE` and a successful on-chain `submitEvidence`; if the chain write fails, the request returns `503` and the DB is not advanced. Outside tolerance keeps the trade in `REVIEW_REQUIRED` (no on-chain evidence write).
+
+### Error semantics
+Chain write/read failures that would otherwise desynchronize money movement return `503 CHAIN_ERROR` and never mark a trade settled. Verification failures for user-submitted tx hashes return `409`. The UI keeps the tx hash visible so the same transaction can be retried idempotently.
+
+---
+
 ## 7. ML service contract (API → ML, port 8000)
 
 ### `GET /health` (public)
@@ -392,7 +440,7 @@ ML internals (fixed for reproducibility): `sklearn.ensemble.IsolationForest(cont
 
 ## 8. Environment variables
 
-See `.env.example` at repo root. Key vars: `DATABASE_URL="postgresql://…/postgres?sslmode=require"` (Supabase or any Postgres), `API_PORT=4000`, `ML_SERVICE_URL=http://127.0.0.1:8000`, `ML_PORT=8000`, `ENERGY_BUFFER_KWH=2`, `BALANCE_TOLERANCE_KWH=5`, `DELIVERY_TOLERANCE_PCT=10`, `CHAIN_ENABLED=true`, `ANVIL_RPC_URL=http://127.0.0.1:8545`, `CONTRACTS_DEPLOYMENT_FILE=../../contracts/deployments/anvil.json`, `OPERATOR_PRIVATE_KEY` (Anvil account #0 dev key), `ATTESTOR_PRIVATE_KEY` (Anvil account #1 dev key), `NEXT_PUBLIC_API_URL=http://127.0.0.1:4000`, `NEXT_PUBLIC_ANVIL_RPC_URL=http://127.0.0.1:8545`.
+See `.env.example` at repo root. Key vars: `DATABASE_URL="postgresql://…/postgres?sslmode=require"` (Supabase or any Postgres), `API_PORT=4000`, `ML_SERVICE_URL=http://127.0.0.1:8000`, `ML_PORT=8000`, `ENERGY_BUFFER_KWH=2`, `BALANCE_TOLERANCE_KWH=5`, `DELIVERY_TOLERANCE_PCT=10`, `CHAIN_ENABLED=true`, `ESCROW_ENABLED=true`, `ESCROW_FUNDING_WINDOW_MINUTES=60`, `ESCROW_DELIVERY_WINDOW_MINUTES=120`, `ANVIL_RPC_URL=http://127.0.0.1:8545`, `CONTRACTS_DEPLOYMENT_FILE=../../contracts/deployments/anvil.json`, `OPERATOR_PRIVATE_KEY` (Anvil account #0 dev key), `ATTESTOR_PRIVATE_KEY` (Anvil account #1 dev key), `NEXT_PUBLIC_API_URL=http://127.0.0.1:4000`, `NEXT_PUBLIC_ANVIL_RPC_URL=http://127.0.0.1:8545`.
 
 ---
 

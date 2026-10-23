@@ -15,167 +15,211 @@ model User {
   walletAddress String?
   createdAt     DateTime @default(now())
 
-  facilities     Facility[]
-  claims         GenerationClaim[]
-  requests       EnergyRequest[]
-  offers         EnergyOffer[]
-  reviewCases    VerificationCase[] @relation("Reviewer")
+  facilities  Facility[]
+  claims      GenerationClaim[]
+  requests    EnergyRequest[]
+  offers      EnergyOffer[]
+  reviewCases VerificationCase[] @relation("Reviewer")
 }
 
 model Facility {
-  id              String   @id @default(uuid())
-  name            String
-  type            String // producer | consumer | storage | mixed
-  timezone        String   @default("UTC")
+  id                  String @id @default(uuid())
+  name                String
+  type                String // producer | consumer | storage | mixed
+  timezone            String @default("UTC")
   installedCapacityKw Float
-  exportLimitKw   Float    @default(0)
-  ownerId         String
-  owner           User     @relation(fields: [ownerId], references: [id])
+  exportLimitKw       Float  @default(0)
+  ownerId             String
+  owner               User   @relation(fields: [ownerId], references: [id])
 
-  meters    Meter[]
-  claims    GenerationClaim[]
-  offers    EnergyOffer[]
+  meters Meter[]
+  claims GenerationClaim[]
+  offers EnergyOffer[]
 }
 
 model Meter {
-  id           String  @id
+  id           String   @id
   facilityId   String
   facility     Facility @relation(fields: [facilityId], references: [id])
   meterType    String // generation | load | grid_import | grid_export | battery_charge | battery_discharge
-  unit         String  @default("kWh")
-  sourceType   String  @default("simulated") // simulated | csv | manual | gateway
-  sourceStatus String  @default("authorized") // authorized | unverified | revoked
+  unit         String   @default("kWh")
+  sourceType   String   @default("simulated") // simulated | csv | manual | gateway
+  sourceStatus String   @default("authorized") // authorized | unverified | revoked
 
   readings MeterReading[]
 }
 
 model MeterReading {
-  id             String   @id @default(uuid())
-  meterId        String
-  meter          Meter    @relation(fields: [meterId], references: [id])
-  intervalStart  DateTime
-  intervalEnd    DateTime
-  energyKwh      Float
-  ingestedAt     DateTime @default(now())
+  id              String   @id @default(uuid())
+  meterId         String
+  meter           Meter    @relation(fields: [meterId], references: [id])
+  intervalStart   DateTime
+  intervalEnd     DateTime
+  energyKwh       Float
+  ingestedAt      DateTime @default(now())
   sourceReference String?
-  qualityStatus  String   @default("ok") // ok | suspect | invalid
+  qualityStatus   String   @default("ok") // ok | suspect | invalid
 
   @@unique([meterId, intervalStart, intervalEnd])
 }
 
 model CertificateRecord {
-  id            String   @id
-  registry      String   @default("MOCK")
-  externalId    String   @unique
-  issuer        String
-  quantityMwh   Float
-  status        String // ACTIVE | TRANSFERRED | RETIRED | INVALID | UNKNOWN
+  id             String   @id
+  registry       String   @default("MOCK")
+  externalId     String   @unique
+  issuer         String
+  quantityMwh    Float
+  status         String // ACTIVE | TRANSFERRED | RETIRED | INVALID | UNKNOWN
   ownerReference String?
-  metadataHash  String
-  issuedAt      DateTime @default(now())
+  metadataHash   String
+  issuedAt       DateTime @default(now())
 }
 
 model GenerationClaim {
-  id                   String   @id @default(uuid())
-  facilityId           String
-  facility             Facility @relation(fields: [facilityId], references: [id])
-  intervalStart        DateTime
-  intervalEnd          DateTime
-  claimedKwh           Float
+  id                    String   @id @default(uuid())
+  facilityId            String
+  facility              Facility @relation(fields: [facilityId], references: [id])
+  intervalStart         DateTime
+  intervalEnd           DateTime
+  claimedKwh            Float
   certificateExternalId String?
-  status               String   @default("PENDING") // PENDING | VERIFIED_FOR_PROTOTYPE | REVIEW_REQUIRED | REJECTED_BY_RULE
-  createdAt            DateTime @default(now())
-  createdById          String
-  createdBy            User     @relation(fields: [createdById], references: [id])
+  status                String   @default("PENDING") // PENDING | VERIFIED_FOR_PROTOTYPE | REVIEW_REQUIRED | REJECTED_BY_RULE
+  createdAt             DateTime @default(now())
+  createdById           String
+  createdBy             User     @relation(fields: [createdById], references: [id])
 
   verificationCase VerificationCase?
   offers           EnergyOffer[]
 }
 
 model VerificationCase {
-  id             String   @id
-  claimId        String   @unique
-  claim          GenerationClaim @relation(fields: [claimId], references: [id])
-  ruleResults    String // JSON string: [{code, severity, message}]
-  anomalyScore   Float?
-  anomalyFlags   String? // JSON string: string[]
-  modelVersion   String?
-  mlStatus       String? // OK | ANOMALY_FLAGGED | UNAVAILABLE
-  reviewStatus   String   @default("OPEN") // OPEN | APPROVED_BY_REVIEWER | REJECTED_BY_REVIEWER
-  reviewerId     String?
-  reviewer       User?    @relation("Reviewer", fields: [reviewerId], references: [id])
-  decidedAt      DateTime?
-  decisionNote   String?
-  createdAt      DateTime @default(now())
+  id           String          @id
+  claimId      String          @unique
+  claim        GenerationClaim @relation(fields: [claimId], references: [id])
+  ruleResults  String // JSON string: [{code, severity, message}]
+  anomalyScore Float?
+  anomalyFlags String? // JSON string: string[]
+  modelVersion String?
+  mlStatus     String? // OK | ANOMALY_FLAGGED | UNAVAILABLE
+  reviewStatus String          @default("OPEN") // OPEN | APPROVED_BY_REVIEWER | REJECTED_BY_REVIEWER
+  reviewerId   String?
+  reviewer     User?           @relation("Reviewer", fields: [reviewerId], references: [id])
+  decidedAt    DateTime?
+  decisionNote String?
+  createdAt    DateTime        @default(now())
 }
 
 model EnergyOffer {
-  id            String   @id @default(uuid())
+  id            String          @id @default(uuid())
   facilityId    String
-  facility      Facility @relation(fields: [facilityId], references: [id])
+  facility      Facility        @relation(fields: [facilityId], references: [id])
   claimId       String
   claim         GenerationClaim @relation(fields: [claimId], references: [id])
   intervalStart DateTime
   intervalEnd   DateTime
   quantityKwh   Float
-  reservedKwh   Float    @default(0)
+  reservedKwh   Float           @default(0)
   pricePerKwh   Float
-  status        String   @default("OPEN") // OPEN | PARTIALLY_RESERVED | FILLED | WITHDRAWN | BLOCKED
-  createdAt     DateTime @default(now())
+  status        String          @default("OPEN") // OPEN | PARTIALLY_RESERVED | FILLED | WITHDRAWN | BLOCKED
+  createdAt     DateTime        @default(now())
   createdById   String
-  createdBy     User     @relation(fields: [createdById], references: [id])
+  createdBy     User            @relation(fields: [createdById], references: [id])
 
   trades Trade[]
 }
 
 model EnergyRequest {
-  id              String   @id @default(uuid())
-  buyerId         String
-  buyer           User     @relation(fields: [buyerId], references: [id])
+  id                    String   @id @default(uuid())
+  buyerId               String
+  buyer                 User     @relation(fields: [buyerId], references: [id])
   destinationFacilityId String?
-  intervalStart   DateTime
-  intervalEnd     DateTime
-  quantityKwh     Float
-  allocatedKwh    Float    @default(0)
-  maxPricePerKwh  Float
-  status          String   @default("OPEN") // OPEN | PARTIALLY_FILLED | FILLED | CANCELLED
-  createdAt       DateTime @default(now())
+  intervalStart         DateTime
+  intervalEnd           DateTime
+  quantityKwh           Float
+  allocatedKwh          Float    @default(0)
+  maxPricePerKwh        Float
+  status                String   @default("OPEN") // OPEN | PARTIALLY_FILLED | FILLED | CANCELLED
+  createdAt             DateTime @default(now())
 
   trades Trade[]
 }
 
 model Trade {
-  id               String   @id @default(uuid())
+  id               String        @id @default(uuid())
   offerId          String
-  offer           EnergyOffer @relation(fields: [offerId], references: [id])
-  requestId       String
-  request         EnergyRequest @relation(fields: [requestId], references: [id])
-  agreedKwh       Float
-  pricePerKwh     Float
-  state           String   @default("MATCHED") // MATCHED | EVIDENCE_SUBMITTED | REVIEW_REQUIRED | DISPUTED | SETTLED
+  offer            EnergyOffer   @relation(fields: [offerId], references: [id])
+  requestId        String
+  request          EnergyRequest @relation(fields: [requestId], references: [id])
+  agreedKwh        Float
+  pricePerKwh      Float
+  state            String        @default("MATCHED") // MATCHED | EVIDENCE_SUBMITTED | REVIEW_REQUIRED | DISPUTED | SETTLED
   deliveryEvidence String? // JSON string
-  evidenceHash    String?
-  discrepancyPct  Float?
-  chainTradeId    Int?
-  chainTxHash     String?
+  evidenceHash     String?
+  discrepancyPct   Float?
+  chainTradeId     Int?
+  chainTxHash      String?
   settlementTxHash String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+
+  // ---- Mutual-stake escrow (all token amounts are integer base-unit strings) ----
+  escrowEnabled                   Boolean   @default(false)
+  escrowRequired                  Boolean   @default(false)
+  escrowState                     String    @default("NONE") // NONE | AWAITING_FUNDING | DELIVERY_ACTIVE | DISPUTED | SETTLED | PARTIALLY_SETTLED | DEFAULTED | CANCELLED
+  settlementToken                 String?
+  settlementTokenSymbol           String?
+  settlementTokenDecimals         Int?
+  pricePerKwhUnits                String?
+  tradeValueUnits                 String?
+  consumerPaymentUnits            String?
+  consumerCollateralUnits         String?
+  producerCollateralUnits         String?
+  consumerPaymentFundedUnits      String    @default("0")
+  consumerCollateralFundedUnits   String    @default("0")
+  producerCollateralFundedUnits   String    @default("0")
+  collateralRatioBps              Int?
+  fundingDeadline                 DateTime?
+  deliveryDeadline                DateTime?
+  deliveryGracePeriodSeconds      Int?
+  escrowInitTxHash                String?
+  consumerPaymentTxHash           String?
+  consumerCollateralTxHash        String?
+  producerCollateralTxHash        String?
+  fundingActivationTxHash         String?
+  fundedAt                        DateTime?
+  verifiedDeliveredKwh            Float?
+  verifiedDeliveredKwhMilli       String?
+  paymentToProducerUnits          String?
+  paymentRefundedUnits            String?
+  producerCollateralReturnedUnits String?
+  producerCollateralSlashedUnits  String?
+  consumerCollateralReturnedUnits String?
+  settlementOutcome               String? // FULL_DELIVERY | PARTIAL_DELIVERY | PRODUCER_DEFAULT | CANCELLED
+  finalSettlementTxHash           String?
+  disputeRaisedBy                 String?
+  disputeReason                   String?
+  disputeTxHash                   String?
+  disputeResolutionOutcome        String?
+  disputeResolutionReason         String?
+  disputeResolutionEvidenceHash   String?
+  disputeResolutionTxHash         String?
+  resolvedAt                      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   evidenceBundles EvidenceBundle[]
   rewardEvents    RewardEvent[]
 }
 
 model EvidenceBundle {
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   tradeId           String
-  trade             Trade    @relation(fields: [tradeId], references: [id])
+  trade             Trade     @relation(fields: [tradeId], references: [id])
   recordReferences  String // JSON string: string[]
   evidenceHash      String
-  attestationStatus String   @default("PENDING") // PENDING | ATTESTED | REJECTED
+  attestationStatus String    @default("PENDING") // PENDING | ATTESTED | REJECTED
   attestedBy        String?
   attestedAt        DateTime?
-  createdAt         DateTime @default(now())
+  createdAt         DateTime  @default(now())
 }
 
 model RewardEvent {

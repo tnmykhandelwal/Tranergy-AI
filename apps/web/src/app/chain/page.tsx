@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Contract, JsonRpcProvider } from "ethers";
 import { getChainStatus, getTrades, type ChainStatus, type Trade } from "@/lib/api";
+import { mintTestSettlementToken } from "@/lib/escrow";
 import { useAsyncData } from "@/lib/useAsyncData";
 import { useSession } from "@/lib/session";
 import { formatTs, formatWei, shortHex } from "@/lib/format";
@@ -77,6 +78,16 @@ function ChainStatusCard({ status }: { status: ChainStatus }) {
             <span className="text-slate-500">GreenRewardToken</span>
             <CopyableHex value={status.contracts?.greenRewardToken} />
           </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">
+              Settlement token{status.settlementTokenSymbol ? ` (${status.settlementTokenSymbol})` : ""}
+            </span>
+            <CopyableHex value={status.contracts?.settlementToken} />
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">settlement decimals</span>
+            <span className="font-mono text-slate-200">{status.settlementTokenDecimals ?? "—"}</span>
+          </div>
         </div>
       </div>
       {status.error ? (
@@ -89,7 +100,7 @@ function ChainStatusCard({ status }: { status: ChainStatus }) {
 }
 
 export default function ChainPage() {
-  const { userId } = useSession();
+  const { userId, walletAddress } = useSession();
   const chain = useAsyncData(() => getChainStatus(), [], { refreshMs: 10000 });
   const trades = useAsyncData(() => getTrades(), [userId], { refreshMs: 20000 });
 
@@ -97,8 +108,25 @@ export default function ChainPage() {
   const [balance, setBalance] = useState<string | null>(null);
   const [balanceBusy, setBalanceBusy] = useState(false);
   const [balanceErr, setBalanceErr] = useState<string | null>(null);
+  const [faucetBusy, setFaucetBusy] = useState(false);
 
   const tokenAddress = chain.data?.contracts?.greenRewardToken ?? null;
+  const settlementToken = chain.data?.contracts?.settlementToken ?? null;
+  const faucet = async () => {
+    if (!settlementToken) {
+      toast("Settlement token address unknown — deploy the chain first.", "error");
+      return;
+    }
+    setFaucetBusy(true);
+    try {
+      const tx = await mintTestSettlementToken(settlementToken);
+      toast(`Minted 1,000,000 test tokens · tx ${shortHex(tx, 8, 6)}`, "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setFaucetBusy(false);
+    }
+  };
 
   const lookup = async () => {
     setBalance(null);
@@ -238,12 +266,27 @@ export default function ChainPage() {
           </div>
 
           <div className={`${cardClass} p-4`}>
+            <h2 className="text-sm font-semibold text-slate-100">Test settlement token</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Mutual escrow uses {chain.data?.settlementTokenSymbol ?? "TSTR"} with{" "}
+              {chain.data?.settlementTokenDecimals ?? 6} decimals. Mint test funds to the connected wallet
+              ({walletAddress ? shortHex(walletAddress, 6, 4) : "not connected"}).
+            </p>
+            <button type="button" onClick={faucet} disabled={faucetBusy || !walletAddress} className={`${buttonPrimary} mt-3`}>
+              {faucetBusy ? <Spinner /> : null} Faucet 1,000,000 {chain.data?.settlementTokenSymbol ?? "TSTR"}
+            </button>
+            <p className="mt-3 text-[11px] text-slate-500">
+              Test asset only — no monetary value. Each escrow deposit requires an ERC-20 approval followed by the deposit transaction.
+            </p>
+          </div>
+
+          <div className={`${cardClass} p-4`}>
             <h2 className="text-sm font-semibold text-slate-100">Local stack</h2>
             <p className="mt-0.5 text-xs text-slate-500">Start everything in this order:</p>
             <ol className="mt-3 space-y-2">
               {[
                 { cmd: "anvil --host 127.0.0.1 --port 8545", desc: "local chain (npm run chain:anvil)" },
-                { cmd: "bash scripts/deploy-chain.sh", desc: "deploy EnergyTrade + GreenRewardToken" },
+                { cmd: "bash scripts/deploy-chain.sh", desc: "deploy EnergyTrade + GreenRewardToken + MockSettlementToken" },
                 { cmd: "npm run dev -w services/api", desc: "API on :4000 (uses your Postgres database)" },
                 { cmd: "bash scripts/run-ml.sh", desc: "ML service on :8000" },
                 { cmd: "open http://localhost:3000/setup", desc: "create facilities, meters and certificates" },
@@ -260,7 +303,8 @@ export default function ChainPage() {
               ))}
             </ol>
             <p className="mt-3 text-[11px] text-slate-500">
-              If the chain is down the app still works — trades settle off-chain with a chainDisabled note.
+              Escrow-capable deployments refuse to create trades while the chain/operator is unavailable; actions
+              return 503 and are safe to retry. Legacy deployments without a settlement token still use the off-chain path.
             </p>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { BrowserProvider } from "ethers";
+import { BrowserProvider, type Signer } from "ethers";
 
 export interface EthereumProvider {
   request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
@@ -46,6 +46,11 @@ export async function signWalletMessage(message: string): Promise<string> {
   const provider = new BrowserProvider(requireProvider());
   const signer = await provider.getSigner();
   return signer.signMessage(message);
+}
+
+export async function getWalletSigner(): Promise<Signer> {
+  const provider = new BrowserProvider(requireProvider());
+  return provider.getSigner();
 }
 
 export function shortAddress(address?: string | null): string {

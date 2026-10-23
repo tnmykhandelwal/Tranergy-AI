@@ -19,7 +19,7 @@
     "build": "npm run build -w services/api && npm run build -w apps/web",
     "test:api": "npm run test -w services/api",
     "test:ml": "bash scripts/test-ml.sh",
-    "test:contracts": "forge test -vv"
+    "test:contracts": "forge test --root contracts -vv"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,

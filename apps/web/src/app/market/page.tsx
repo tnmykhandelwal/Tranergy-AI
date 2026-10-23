@@ -509,11 +509,32 @@ export default function MarketPage() {
                   { key: "req", header: "Request", render: (t) => <span className="font-mono text-xs">{t.requestId}</span> },
                   { key: "kwh", header: "Agreed", align: "right", render: (t) => formatKwh(t.agreedKwh) },
                   { key: "price", header: "Price", align: "right", render: (t) => formatPrice(t.pricePerKwh) },
+                  {
+                    key: "escrow",
+                    header: "Escrow",
+                    render: (t) =>
+                      t.escrowError ? (
+                        <Badge label="UNAVAILABLE" status="INVALID" />
+                      ) : t.escrowEnabled ? (
+                        <Badge label="AWAITING_FUNDING" status="PENDING" />
+                      ) : (
+                        <span className="text-slate-600">legacy</span>
+                      ),
+                  },
                   { key: "state", header: "State", render: (t) => <Badge label={t.state} status={t.state} /> },
                 ]}
                 rows={runResult.createdTrades}
                 rowKey={(t) => t.tradeId}
               />
+            ) : null}
+            {runResult.createdTrades.some((t) => t.escrowError) ? (
+              <Callout tone="error" title="Some trades could not register escrow">
+                {runResult.createdTrades
+                  .filter((t) => t.escrowError)
+                  .map((t) => `${t.tradeId}: ${t.escrowError}`)
+                  .join(" · ")}
+                {" "}These trades are kept in REVIEW_REQUIRED and cannot settle off-chain.
+              </Callout>
             ) : null}
           </div>
         ) : null}

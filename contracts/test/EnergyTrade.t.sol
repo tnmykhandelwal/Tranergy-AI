@@ -3,10 +3,12 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {GreenRewardToken} from "../src/GreenRewardToken.sol";
+import {MockSettlementToken} from "../src/MockSettlementToken.sol";
 import {EnergyTrade} from "../src/EnergyTrade.sol";
 
 contract EnergyTradeTest is Test, EnergyTrade {
     GreenRewardToken internal token;
+    MockSettlementToken internal settlement;
 
     address internal operator;
     address internal attestor;
@@ -17,11 +19,17 @@ contract EnergyTradeTest is Test, EnergyTrade {
     bytes32 internal constant EVIDENCE_HASH = keccak256("evidence-bundle-v1");
     bytes32 internal constant DISPUTE_REASON = keccak256("meter-mismatch");
 
-    constructor() EnergyTrade(_deployToken()) {}
+    constructor() EnergyTrade(_deployRewardToken(), _deploySettlementToken(), 10_000, 1 days) {}
 
-    function _deployToken() internal returns (address) {
+    function _deployRewardToken() internal returns (address) {
         GreenRewardToken deployed = new GreenRewardToken(address(this));
         token = deployed;
+        return address(deployed);
+    }
+
+    function _deploySettlementToken() internal returns (address) {
+        MockSettlementToken deployed = new MockSettlementToken(address(this));
+        settlement = deployed;
         return address(deployed);
     }
 

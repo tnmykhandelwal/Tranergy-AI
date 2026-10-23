@@ -90,7 +90,13 @@ export interface ChainStatus {
   connected: boolean;
   chainId?: number | null;
   blockNumber?: number | null;
-  contracts?: { energyTrade?: string; greenRewardToken?: string } | null;
+  contracts?: {
+    energyTrade?: string | null;
+    greenRewardToken?: string | null;
+    settlementToken?: string | null;
+  } | null;
+  settlementTokenSymbol?: string | null;
+  settlementTokenDecimals?: number | null;
   deploymentFile?: string;
   error?: string;
 }
@@ -302,6 +308,10 @@ export interface CreatedTrade {
   agreedKwh: number;
   pricePerKwh: number;
   state: string;
+  chainTradeId?: number | null;
+  chainTxHash?: string | null;
+  escrowEnabled?: boolean;
+  escrowError?: string | null;
 }
 
 export interface MatchRunResult {
@@ -311,10 +321,110 @@ export interface MatchRunResult {
 
 export type TradeState =
   | "MATCHED"
+  | "DELIVERY_ACTIVE"
   | "EVIDENCE_SUBMITTED"
   | "SETTLED"
+  | "PARTIALLY_SETTLED"
+  | "DEFAULTED"
+  | "CANCELLED"
   | "DISPUTED"
   | "REVIEW_REQUIRED";
+
+export type EscrowState =
+  | "NONE"
+  | "AWAITING_FUNDING"
+  | "DELIVERY_ACTIVE"
+  | "DISPUTED"
+  | "SETTLED"
+  | "PARTIALLY_SETTLED"
+  | "DEFAULTED"
+  | "CANCELLED"
+  | "UNAVAILABLE";
+
+export type EscrowDepositKind = "consumer_payment" | "consumer_collateral" | "producer_collateral";
+export type EscrowDisputeOutcome = "full_delivery" | "partial_delivery" | "producer_default";
+
+export interface EscrowDeposit {
+  requiredUnits: string;
+  fundedUnits: string;
+  outstandingUnits: string;
+  required: string;
+  funded: string;
+  outstanding: string;
+  confirmed: boolean;
+  txHash?: string | null;
+}
+
+export interface EscrowView {
+  enabled: boolean;
+  required: boolean;
+  escrowState: EscrowState | string;
+  chainTradeId?: number | null;
+  settlementToken: {
+    address?: string | null;
+    symbol?: string | null;
+    decimals: number;
+    testAsset?: boolean;
+    unit?: string;
+  };
+  quantityKwh: number;
+  pricePerKwh: number;
+  pricePerKwhUnits?: string | null;
+  tradeValueUnits?: string | null;
+  tradeValue: string;
+  collateralRatioBps?: number | null;
+  deposits: {
+    consumerPayment: EscrowDeposit;
+    consumerCollateral: EscrowDeposit;
+    producerCollateral: EscrowDeposit;
+  };
+  totals: {
+    requiredUnits: string;
+    fundedUnits: string;
+    totalRequired: string;
+    totalFunded: string;
+    fundingPct: number;
+  };
+  deadlines: {
+    fundingDeadline?: string | null;
+    deliveryDeadline?: string | null;
+    gracePeriodSeconds?: number | null;
+  };
+  activation: {
+    fundedAt?: string | null;
+    escrowInitTxHash?: string | null;
+    fundingActivationTxHash?: string | null;
+  };
+  verification: {
+    evidenceHash?: string | null;
+    deliveredKwh?: number | null;
+    deliveredKwhMilli?: string | null;
+  };
+  settlement: {
+    outcome?: string | null;
+    paymentToProducerUnits?: string | null;
+    paymentRefundedUnits?: string | null;
+    producerCollateralReturnedUnits?: string | null;
+    producerCollateralSlashedUnits?: string | null;
+    consumerCollateralReturnedUnits?: string | null;
+    paymentToProducer: string;
+    paymentRefunded: string;
+    producerCollateralReturned: string;
+    producerCollateralSlashed: string;
+    consumerCollateralReturned: string;
+    finalSettlementTxHash?: string | null;
+    resolvedAt?: string | null;
+  };
+  dispute: {
+    raisedBy?: string | null;
+    reason?: string | null;
+    txHash?: string | null;
+    resolutionOutcome?: string | null;
+    resolutionReason?: string | null;
+    resolutionEvidenceHash?: string | null;
+    resolutionTxHash?: string | null;
+  };
+}
 
 export interface Trade {
   id: string;
@@ -324,9 +434,27 @@ export interface Trade {
   pricePerKwh: number;
   state: TradeState | string;
   evidenceHash?: string | null;
+  discrepancyPct?: number | null;
   chainTradeId?: number | null;
   chainTxHash?: string | null;
   settlementTxHash?: string | null;
+  escrowEnabled?: boolean;
+  escrowRequired?: boolean;
+  escrowState?: EscrowState | string | null;
+  settlementToken?: string | null;
+  settlementTokenSymbol?: string | null;
+  settlementTokenDecimals?: number | null;
+  tradeValueUnits?: string | null;
+  consumerPaymentUnits?: string | null;
+  consumerCollateralUnits?: string | null;
+  producerCollateralUnits?: string | null;
+  consumerPaymentFundedUnits?: string | null;
+  consumerCollateralFundedUnits?: string | null;
+  producerCollateralFundedUnits?: string | null;
+  fundingDeadline?: string | null;
+  deliveryDeadline?: string | null;
+  settlementOutcome?: string | null;
+  verifiedDeliveredKwh?: number | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -358,6 +486,7 @@ export interface RewardEvent {
 }
 
 export interface TradeDetail extends Trade {
+  escrow?: EscrowView | null;
   evidenceBundles?: EvidenceBundle[];
   rewardEvents?: RewardEvent[];
   evidence?: EvidenceBundle[];
@@ -380,6 +509,7 @@ export interface AttestResult {
 }
 
 export interface Receipt {
+  escrow?: EscrowView | null;
   trade: {
     id: string;
     state: string;
@@ -664,7 +794,94 @@ export function getTrades(bust?: boolean): Promise<TradesResponse> {
 }
 
 export function getTrade(id: string): Promise<TradeDetail> {
-  return apiFetch<TradeDetail>(`/api/trades/${encodeURIComponent(id)}`, { auth: false });
+  return apiFetch<TradeDetail>(`/api/trades/${encodeURIComponent(id)}`, { auth: false, bust: true });
+}
+
+export interface EscrowResponse {
+  trade: Trade;
+  escrow: EscrowView | null;
+  chain?: { enabled: boolean; readable: boolean; writable: boolean };
+}
+
+export function getEscrow(id: string): Promise<EscrowResponse> {
+  return apiFetch<EscrowResponse>(`/api/trades/${encodeURIComponent(id)}/escrow`, {
+    auth: false,
+    bust: true,
+  });
+}
+
+export function syncEscrow(id: string): Promise<EscrowResponse> {
+  return apiFetch<EscrowResponse>(`/api/trades/${encodeURIComponent(id)}/escrow/sync`, {
+    method: "POST",
+    body: {},
+  });
+}
+
+export interface EscrowActionResponse extends EscrowResponse {
+  settlementTxHash?: string | null;
+  idempotent?: boolean;
+}
+
+export function postEscrowDeposit(
+  id: string,
+  kind: EscrowDepositKind,
+  txHash: string,
+): Promise<EscrowActionResponse> {
+  return apiFetch<EscrowActionResponse>(`/api/trades/${encodeURIComponent(id)}/escrow/deposits`, {
+    method: "POST",
+    body: { kind, txHash },
+  });
+}
+
+export function postEscrowDispute(
+  id: string,
+  reason: string,
+  txHash: string,
+): Promise<EscrowActionResponse> {
+  return apiFetch<EscrowActionResponse>(`/api/trades/${encodeURIComponent(id)}/escrow/dispute`, {
+    method: "POST",
+    body: { reason, txHash },
+  });
+}
+
+export function cancelEscrow(id: string): Promise<EscrowActionResponse> {
+  return apiFetch<EscrowActionResponse>(`/api/trades/${encodeURIComponent(id)}/escrow/cancel`, {
+    method: "POST",
+    body: {},
+  });
+}
+
+export function postPartialSettlement(id: string, deliveredKwh: number): Promise<EscrowActionResponse> {
+  return apiFetch<EscrowActionResponse>(`/api/trades/${encodeURIComponent(id)}/partial-settlement`, {
+    method: "POST",
+    body: { deliveredKwh },
+  });
+}
+
+export function postResolveDefault(
+  id: string,
+  reason: string,
+  evidenceHash?: string,
+): Promise<EscrowActionResponse> {
+  return apiFetch<EscrowActionResponse>(`/api/trades/${encodeURIComponent(id)}/resolve-default`, {
+    method: "POST",
+    body: { reason, ...(evidenceHash ? { evidenceHash } : {}) },
+  });
+}
+
+export function postResolveDispute(
+  id: string,
+  body: {
+    outcome: EscrowDisputeOutcome;
+    deliveredKwh?: number;
+    reason: string;
+    evidenceHash?: string;
+  },
+): Promise<EscrowActionResponse> {
+  return apiFetch<EscrowActionResponse>(`/api/trades/${encodeURIComponent(id)}/disputes/resolve`, {
+    method: "POST",
+    body,
+  });
 }
 
 export interface EvidenceBody {

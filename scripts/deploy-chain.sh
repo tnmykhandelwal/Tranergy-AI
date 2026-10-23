@@ -61,13 +61,20 @@ if [ ! -f "$DEPLOYMENT_FILE" ]; then
   exit 1
 fi
 
-read -r TOKEN TRADE DEPLOYER DEPLOYMENT_CHAIN_ID < <(
+read -r TOKEN TRADE SETTLEMENT DEPLOYER DEPLOYMENT_CHAIN_ID < <(
   node -e '
     const fs = require("fs");
     const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    process.stdout.write([d.greenRewardToken, d.energyTrade, d.deployer, d.chainId].join(" ") + "\n");
+    process.stdout.write(
+      [d.greenRewardToken, d.energyTrade, d.settlementToken, d.deployer, d.chainId].join(" ") + "\n",
+    );
   ' "$DEPLOYMENT_FILE"
 )
+
+if [ -z "${SETTLEMENT:-}" ] || [ "$SETTLEMENT" = "undefined" ]; then
+  echo "ERROR: deployment file is missing the settlement token address. Redeploy with the current script." >&2
+  cleanup
+fi
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
 if [ "$ACTUAL_CHAIN_ID" != "$DEPLOYMENT_CHAIN_ID" ]; then
@@ -75,7 +82,7 @@ if [ "$ACTUAL_CHAIN_ID" != "$DEPLOYMENT_CHAIN_ID" ]; then
   cleanup
 fi
 
-for entry in "GreenRewardToken:$TOKEN" "EnergyTrade:$TRADE"; do
+for entry in "GreenRewardToken:$TOKEN" "MockSettlementToken:$SETTLEMENT" "EnergyTrade:$TRADE"; do
   label="${entry%%:*}"
   address="${entry#*:}"
   code="$(cast code "$address" --rpc-url "$RPC_URL")"
@@ -105,6 +112,12 @@ if [ "$ATTESTOR_ADDRESS" != "0x0000000000000000000000000000000000000000" ]; then
   has_role "$TRADE" "$ATTESTOR_ROLE" "$ATTESTOR_ADDRESS" "ATTESTOR_ROLE"
 fi
 has_role "$TOKEN" "$MINTER_ROLE" "$TRADE" "MINTER_ROLE"
+
+SETTLEMENT_DECIMALS="$(cast call "$SETTLEMENT" "decimals()(uint8)" --rpc-url "$RPC_URL")"
+if [ "$SETTLEMENT_DECIMALS" != "6" ]; then
+  echo "ERROR: expected 6 settlement-token decimals but found $SETTLEMENT_DECIMALS." >&2
+  cleanup
+fi
 
 echo
 echo "Deployed and verified. contracts/deployments/${DEPLOYMENT_NAME}.json:"

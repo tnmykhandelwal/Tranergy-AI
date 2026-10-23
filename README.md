@@ -10,7 +10,7 @@ Tranergy AI connects trustworthy energy evidence to energy-market decisions: it 
 2. **Human review queue** — flagged claims show every rule result, the ML score, and reason codes; an authorized verifier approves or rejects with an audit trail. Questionable quantities never reach the marketplace automatically.
 3. **Surplus & offerable calculation** — per-interval energy balance with `estimatedSurplus`, `offerable`, `reserved`, `buffer`, and measured export shown as distinct quantities (assumptions visible).
 4. **Microgrid matching** — deterministic, explainable offer/request matching (interval compatibility, verified quantity, price order) with transactional reservations that prevent double allocation.
-5. **Delivery evidence & settlement** — delivery-interval evidence is hashed (SHA-256), discrepancy-checked against a tolerance, attested by the verifier role, and written to the `EnergyTrade` contract (`Matched → EvidenceSubmitted → Settled`, or `Disputed`). Settlement mints a prototype TRGY reward token (1 TRGY per kWh, **no monetary value, not a certificate**).
+5. **Mutual-stake escrow settlement** — consumer payment + both sides' collateral are locked on-chain before delivery (`Matched → DeliveryActive`). Delivery-interval evidence is hashed (SHA-256), discrepancy-checked against a tolerance, and attested by the verifier role. Full delivery pays the producer and returns collateral; partial delivery pays pro-rata and slashes the producer's shortfall; producer default refunds the consumer from payment + slashed collateral; expired unfunded escrows are cancellable with refunds. Settlement also mints a prototype TRGY reward token (1 TRGY per kWh, **no monetary value, not a certificate**).
 6. **Dashboard** — light/dark Next.js UI with animated, colour-coded flows covering facilities/energy charts, claims & review queue, marketplace, trade receipts with tx hashes, chain status, and an Admin page for facilities, meters, certificates and team roles.
 
 **Core differentiator:** evidence quality → surplus eligibility → trade allocation → delivery evidence → settlement are one linked pipeline. A suspicious claim is *held for review*, not just decorated with an AI score.
@@ -23,7 +23,7 @@ flowchart TD
     API --> DB[(PostgreSQL — Supabase)]
     API --> ML[FastAPI ML :8000 IsolationForest]
     API --> CHAIN[ethers.js v6]
-    CHAIN --> SC[EnergyTrade + GreenRewardToken]
+    CHAIN --> SC[EnergyTrade + GreenRewardToken + MockSettlementToken]
     SC --> ANVIL[Anvil :8545]
     API --> SIM[Data generator / CSV ingestion]
     API --> REG[Certificate registry adapter]
@@ -63,11 +63,11 @@ Prerequisites: Node 24+, Python 3.10+ (venv), [Foundry](https://getfoundry.sh) (
    bash scripts/setup.sh     # deps, python venv, prisma generate + db push
    ```
 
-3. **Run the stack** (order matters):
+3. **Run the stack** (order matters; the deploy step now requires the escrow-capable contracts):
 
    ```bash
    npm run chain:anvil          # 1. local EVM
-   npm run chain:deploy         # 2. deploy contracts → contracts/deployments/anvil.json
+   npm run chain:deploy         # 2. deploy contracts (incl. TSTR settlement token) → deployments/anvil.json
    npm run dev:ml               # 3. ML service (:8000)
    npm run dev:api              # 4. API (:4000)
    npm run dev:web              # 5. dashboard (:3000)
@@ -75,6 +75,7 @@ Prerequisites: Node 24+, Python 3.10+ (venv), [Foundry](https://getfoundry.sh) (
 
 4. **Sign in** — open **http://localhost:3000**, connect a wallet and sign the message. The first wallet becomes `admin`. Then open **Admin** (`/setup`) to create facilities, meters and certificates, and to promote verifier wallets.
 5. **Bootstrap meter data** — generate 7 days of data from the Facilities page (or import CSV).
+6. **Get test settlement tokens** — open **Chain** and use the faucet (1,000,000 TSTR) for producer and consumer wallets. TSTR is a valueless test asset.
 
 There is no seed script: everything in the database is created at runtime through wallet sign-in and the dashboard.
 
@@ -109,10 +110,12 @@ RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<KEY>" \
 DEPLOYER_KEY="0x<funded-deployer-key>" \
 ATTESTOR_ADDRESS="0x<verifier-address>" \
 DEPLOYMENT_NAME=sepolia \
+ESCROW_COLLATERAL_RATIO_BPS=10000 \
+ESCROW_DEFAULT_GRACE_PERIOD=86400 \
 bash scripts/deploy-chain.sh
 ```
 
-Or run `bash scripts/deploy-sepolia.sh` for a guided, hidden-input deploy. This writes `contracts/deployments/sepolia.json` (addresses only — safe to commit) and verifies contract code plus role grants. Never reuse the Anvil keys above on a real network.
+Or run `bash scripts/deploy-sepolia.sh` for a guided, hidden-input deploy. The script now deploys **MockSettlementToken (TSTR, 6 decimals)** as well and verifies its decimals. Existing deployment JSONs from before the escrow change lack `settlementToken` — redeploy; the API will otherwise fall back to the legacy non-escrow path for that deployment. This writes `contracts/deployments/sepolia.json` (addresses only — safe to commit) and verifies contract code plus role grants. Never reuse the Anvil keys above on a real network.
 
 Use a **plain EOA** for the deployer. EIP-7702 delegated/smart accounts cannot reliably create contracts, and many public RPCs rate-limit them; `scripts/deploy-sepolia.sh` rejects them up front. Create one with `cast wallet new` if needed.
 
@@ -134,6 +137,9 @@ ANVIL_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<KEY>
 CONTRACTS_DEPLOYMENT_FILE=/app/contracts/deployments/sepolia.json
 OPERATOR_PRIVATE_KEY=0x<deployer-key>
 ATTESTOR_PRIVATE_KEY=0x<verifier-key>
+ESCROW_ENABLED=true
+ESCROW_FUNDING_WINDOW_MINUTES=60
+ESCROW_DELIVERY_WINDOW_MINUTES=120
 ```
 
 Apply the schema once with `npm run db:push` (using the direct/session URL) before the first boot. Health check: `/api/health`.
@@ -152,21 +158,28 @@ After Vercel gives you a domain, add it to the API's `CORS_ORIGINS` and redeploy
 1. **Sign in & roles** — connect the admin wallet first, then connect producer/consumer wallets and promote one to `verifier` from **Admin**. Create facilities and meters and register a certificate.
 2. **Facilities** — generate 7 days of meter data (or import a CSV), then inspect surplus vs offerable vs measured export per interval.
 3. **Claims** — as the producer, submit a claim against a certificate → it is verified immediately (rules + registry + ML). Soft hits land in the **Review queue**; approve or reject as the verifier.
-4. **Marketplace** — publish an offer (producer) and a request (consumer) for the verified interval, preview matches, then run matching as a verifier or admin → a trade is created with an on-chain tx hash.
-5. **Trades** — submit delivery evidence (discrepancy %), then attest & settle as the verifier → the receipt shows the evidence hash, settlement tx and TRGY reward.
-6. **Chain** — inspect deployed contracts, recent on-chain events and token balances.
+4. **Marketplace** — publish an offer (producer) and a request (consumer) for the verified interval, preview matches, then run matching as a verifier or admin → a trade and its mutual escrow are registered on-chain. If the settlement chain/operator is unavailable, matching refuses to create trades (no off-chain fallback when escrow is required).
+5. **Escrow funding** — open **Trades**: the consumer deposits the payment and consumer collateral, the producer deposits producer collateral (each row does an ERC-20 `approve` then the escrow deposit). When all three are funded the escrow moves to `DeliveryActive`.
+6. **Evidence & settlement** — producer submits delivery evidence. As verifier: **Attest & settle** (full delivery), **Partial delivery** (pro-rata payment + producer shortfall slashed), or **Resolve producer default** after the delivery deadline + grace period. Either party can raise an on-chain dispute; the verifier resolves it without an arbitrary confiscation path. If the funding deadline passes unfunded, anyone can cancel and refund deposits.
+7. **Receipt & chain** — the trade receipt shows token amounts, deadlines, outcome, evidence hashes, settlement tx and the TRGY reward. **Chain** shows deployed contracts, the TSTR faucet, recent on-chain events and token balances.
 
 ## On-chain design
 
-- `EnergyTrade` — `OPERATOR_ROLE` (backend) creates trades and submits evidence hashes; `ATTESTOR_ROLE` (verifier key) attests/settles/disputes. State machine: `Matched → EvidenceSubmitted → Settled | Disputed`. Double-settle and invalid transitions revert.
+- `EnergyTrade` — `OPERATOR_ROLE` (backend) creates trades, records evidence hashes and reconciles escrow; `ATTESTOR_ROLE` (verifier key) settles, resolves defaults and disputes. The escrow state machine is `Matched → DeliveryActive → EvidenceSubmitted → Settled | PartiallySettled | Defaulted | Disputed`, with `Cancelled` from an expired unfunded `Matched`. Double-settle, duplicate deposits and invalid transitions revert.
+- **Mutual escrow** — the consumer locks the full trade value as payment plus collateral; the producer locks the same collateral (default 100% of trade value, `ESCROW_COLLATERAL_RATIO_BPS`). All amounts are integer base units (`quantityKwhMilli` × `pricePerKwhUnits / 1000`, OpenZeppelin `Math.mulDiv`). The collateral ratio and grace period are snapshotted per trade at creation. Full delivery: payment to producer, both collaterals returned. Partial: pro-rata payment, producer shortfall slashed to the consumer, remaining collateral returned. Default (after deadline + grace): payment refunded, producer collateral slashed to the consumer. Consumer collateral is always returned because the contract cannot enforce consumer performance obligations.
 - `GreenRewardToken` (TRGY, ERC-20) — minted only by the trade contract on settlement. **Prototype reward, no monetary value, not an official certificate.**
-- Raw telemetry, personal data, and certificate documents stay **off-chain**; only IDs, hashes, quantities, and state transitions go on-chain.
+- `MockSettlementToken` (TSTR, ERC-20, 6 decimals) — local/test settlement asset with a permissionless faucet. **Valueless; never deploy on mainnet.**
+- Raw telemetry, personal data, and certificate documents stay **off-chain**; only IDs, hashes, quantities, token amounts and state transitions go on-chain.
+- **Breaking redeploy:** the `EnergyTrade` constructor now takes `(rewardToken, settlementToken, collateralRatioBps, gracePeriod)`, and deployment JSON must include `settlementToken` + decimals. Redeploy `contracts/deployments/anvil.json` (or Sepolia) before running this version; old deployments are intentionally not treated as escrow-capable.
 
 ## Limitations
 
 - Meters and the certificate registry are **simulated** (`data/samples/` contains sample CSVs, including anomaly cases).
 - ML output is **triage, not a fraud verdict** — no score is ever presented as a probability of fraud.
 - Blockchain makes submitted records tamper-evident **after submission**; it cannot prove the original reading was genuine.
+- **Consumer default is not penalized.** The escrow has no enforceable consumer-delivery obligation, so consumer collateral is always returned; only producer non-delivery is slashable. Do not market this as a symmetric penalty.
+- Dispute resolution is attestor-controlled and bounded by the same deadline/evidence rules — it cannot award arbitrary amounts.
+- The settlement token is a test asset (`MockSettlementToken`, valueless). A production deployment must replace it with a real settlement asset and remove the faucet.
 - Anvil dev keys are public and hardcoded in `.env.example` — never use them anywhere real.
 
 ## Repository layout
@@ -176,7 +189,7 @@ tranergy-ai/
 ├── apps/web/            # Next.js dashboard
 ├── services/api/        # Express API, rules, balance, matching, chain integration
 ├── services/ml/         # FastAPI + Isolation Forest pipeline
-├── contracts/           # Foundry project (EnergyTrade, GreenRewardToken, tests, deploy)
+├── contracts/           # Foundry project (EnergyTrade + escrow, TRGY, TSTR, tests, deploy)
 ├── data/samples/        # Sample + anomaly CSVs
 ├── docs/                # api-spec, architecture, data-model
 ├── scripts/             # setup, deploy-chain, run-ml, test-ml
