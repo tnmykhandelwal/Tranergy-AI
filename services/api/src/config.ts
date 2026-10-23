@@ -45,11 +45,34 @@ const envSchema = z.object({
 
 export type AppConfig = z.infer<typeof envSchema>;
 
+export function normalizeDatabaseUrl(raw: string): string {
+  if (!raw.startsWith("postgres://") && !raw.startsWith("postgresql://")) return raw;
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+
+  // Supabase Supavisor transaction mode (port 6543) does not support prepared
+  // statements. Prisma must disable them or queries intermittently fail with
+  // "prepared statement \"sNN\" does not exist" after connections are recycled.
+  if (url.port === "6543") {
+    if (!url.searchParams.has("pgbouncer")) url.searchParams.set("pgbouncer", "true");
+    if (!url.searchParams.has("connection_limit")) url.searchParams.set("connection_limit", "1");
+  }
+
+  return url.toString();
+}
+
 function resolveDatabaseUrl(raw: string): string {
-  if (!raw.startsWith("file:")) return raw;
-  const filePath = raw.slice("file:".length);
-  if (filePath.startsWith("/") || filePath.startsWith("file:/")) return raw;
-  return `file:${path.resolve(apiRoot, filePath)}`;
+  if (raw.startsWith("file:")) {
+    const filePath = raw.slice("file:".length);
+    if (filePath.startsWith("/") || filePath.startsWith("file:/")) return raw;
+    return `file:${path.resolve(apiRoot, filePath)}`;
+  }
+  return normalizeDatabaseUrl(raw);
 }
 
 const parsed = envSchema.safeParse(process.env);
