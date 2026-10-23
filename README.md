@@ -89,6 +89,60 @@ npm run build             # api tsc + web next build
 
 API tests reuse your `DATABASE_URL` but write to a dedicated `tranergy_test` schema (override with `TEST_DATABASE_URL`).
 
+## Deploying (managed split)
+
+`services/api/Dockerfile` and `services/ml/Dockerfile` are production-ready. A typical split is **Vercel (web) + Render (API, ML) + Supabase (database) + Sepolia (chain)**.
+
+**1. Database (Supabase).** Apply the Prisma schema once against the direct/session connection string, then give the API the pooled connection string:
+
+```bash
+DATABASE_URL="postgresql://postgres:<PASSWORD>@db.<PROJECT-REF>.supabase.co:5432/postgres?sslmode=require" \
+  npm run db:push
+```
+
+For the API runtime use the Supabase pooler (port `6543`) with `?pgbouncer=true&connection_limit=1&sslmode=require`.
+
+**2. Contracts (Sepolia).** Fund a deployer wallet, then:
+
+```bash
+RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<KEY>" \
+DEPLOYER_KEY="0x<funded-deployer-key>" \
+ATTESTOR_ADDRESS="0x<verifier-address>" \
+DEPLOYMENT_NAME=sepolia \
+bash scripts/deploy-chain.sh
+```
+
+This writes `contracts/deployments/sepolia.json` (addresses only — safe to commit). Never reuse the Anvil keys above on a real network.
+
+**3. ML service (Render Docker).** Dockerfile `services/ml/Dockerfile`, context = repo root. The image trains and bakes `model.joblib` at build time. Health check: `/health`.
+
+**4. API (Render Docker).** Dockerfile `services/api/Dockerfile`, context = repo root. Environment:
+
+```bash
+NODE_ENV=production
+DATABASE_URL=<Supabase pooled URL>
+AUTH_SECRET=<32+ random chars>
+ADMIN_WALLETS=0x<admin-wallet>
+CORS_ORIGINS=https://<your-web-domain>
+ML_SERVICE_URL=https://<ml-service>.onrender.com
+CHAIN_ENABLED=true
+ANVIL_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<KEY>
+CONTRACTS_DEPLOYMENT_FILE=/app/contracts/deployments/sepolia.json
+OPERATOR_PRIVATE_KEY=0x<deployer-key>
+ATTESTOR_PRIVATE_KEY=0x<verifier-key>
+```
+
+Apply the schema once with `npm run db:push` (using the direct/session URL) before the first boot. Health check: `/api/health`.
+
+**5. Web (Vercel).** Root directory `apps/web`, include files outside the root, install `cd ../.. && npm ci`, build `npm run build -w apps/web`. Set these **at build time**:
+
+```bash
+NEXT_PUBLIC_API_URL=https://<api-service>.onrender.com
+NEXT_PUBLIC_ANVIL_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<PUBLIC-KEY>
+```
+
+After Vercel gives you a domain, add it to the API's `CORS_ORIGINS` and redeploy the API. The first wallet to sign in becomes `admin` (or use `ADMIN_WALLETS`).
+
 ## First-run walkthrough
 
 1. **Sign in & roles** — connect the admin wallet first, then connect producer/consumer wallets and promote one to `verifier` from **Admin**. Create facilities and meters and register a certificate.

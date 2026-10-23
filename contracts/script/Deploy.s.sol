@@ -24,9 +24,17 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        string memory outFile = string.concat(vm.projectRoot(), "/deployments/anvil.json");
+        string memory deploymentName = vm.envOr("DEPLOYMENT_NAME", string("anvil"));
+        string memory outFile = string.concat(
+            vm.projectRoot(),
+            "/deployments/",
+            deploymentName,
+            ".json"
+        );
         string memory json = string.concat(
-            '{"network":"anvil","chainId":',
+            '{"network":"',
+            deploymentName,
+            '","chainId":',
             vm.toString(block.chainid),
             ',"energyTrade":"',
             vm.toString(address(energyTrade)),

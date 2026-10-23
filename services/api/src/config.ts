@@ -24,6 +24,7 @@ const booleanFromEnv = z
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   API_PORT: z.coerce.number().int().positive().default(4000),
+  CORS_ORIGINS: z.string().default("http://localhost:3000,http://127.0.0.1:3000"),
   ML_SERVICE_URL: z.string().url().default("http://127.0.0.1:8000"),
   ENERGY_BUFFER_KWH: z.coerce.number().nonnegative().default(2),
   BALANCE_TOLERANCE_KWH: z.coerce.number().nonnegative().default(5),
@@ -54,14 +55,30 @@ if (!parsed.success) {
   throw new Error(`Invalid environment configuration: ${issues}`);
 }
 
+if (
+  process.env.NODE_ENV === "production" &&
+  parsed.data.AUTH_SECRET === "tranergy-local-dev-secret-change-me"
+) {
+  throw new Error("AUTH_SECRET must be set to a unique value when NODE_ENV=production");
+}
+
 const resolvedDatabaseUrl = resolveDatabaseUrl(parsed.data.DATABASE_URL);
 process.env.DATABASE_URL = resolvedDatabaseUrl;
 
-export const config: AppConfig & { DATABASE_URL: string; adminWallets: string[] } = {
+export const config: AppConfig & {
+  DATABASE_URL: string;
+  adminWallets: string[];
+  corsOrigins: string[];
+} = {
   ...parsed.data,
+  API_PORT: Number(process.env.PORT) || parsed.data.API_PORT,
   DATABASE_URL: resolvedDatabaseUrl,
   adminWallets: (parsed.data.ADMIN_WALLETS ?? "")
     .split(",")
     .map((w) => w.trim().toLowerCase())
+    .filter(Boolean),
+  corsOrigins: (parsed.data.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
     .filter(Boolean),
 };

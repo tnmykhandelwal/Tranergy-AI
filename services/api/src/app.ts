@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import { config } from "./config";
 import { errorHandler } from "./errors";
 import { authRouter } from "./routes/auth";
 import { certificatesRouter } from "./routes/certificates";
@@ -18,7 +19,7 @@ export function createApp(): express.Express {
 
   app.use(
     cors({
-      origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+      origin: config.corsOrigins.includes("*") ? true : config.corsOrigins,
     }),
   );
   app.use(express.json({ limit: "5mb" }));
