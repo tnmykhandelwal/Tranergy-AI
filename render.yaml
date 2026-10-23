@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: tranergy-ml
+    runtime: docker
+    plan: free
+    dockerContext: .
+    dockerfilePath: services/ml/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ML_MODEL_DIR
+        value: ./models
+
+  - type: web
+    name: tranergy-api
+    runtime: docker
+    plan: free
+    dockerContext: .
+    dockerfilePath: services/api/Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: ADMIN_WALLETS
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ML_SERVICE_URL
+        sync: false
+      - key: CHAIN_ENABLED
+        value: "true"
+      - key: ANVIL_RPC_URL
+        sync: false
+      - key: CONTRACTS_DEPLOYMENT_FILE
+        value: /app/contracts/deployments/sepolia.json
+      - key: OPERATOR_PRIVATE_KEY
+        sync: false
+      - key: ATTESTOR_PRIVATE_KEY
+        sync: false
+      - key: ALLOW_HEADER_AUTH
+        value: "false"

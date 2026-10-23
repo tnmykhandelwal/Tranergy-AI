@@ -5,7 +5,8 @@ build/
 coverage/
 *.log
 .env
-.env.local
+.env.*
+!.env.example
 dev.db
 dev.db-journal
 services/api/dev.db

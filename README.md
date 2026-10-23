@@ -112,7 +112,11 @@ DEPLOYMENT_NAME=sepolia \
 bash scripts/deploy-chain.sh
 ```
 
-This writes `contracts/deployments/sepolia.json` (addresses only — safe to commit). Never reuse the Anvil keys above on a real network.
+Or run `bash scripts/deploy-sepolia.sh` for a guided, hidden-input deploy. This writes `contracts/deployments/sepolia.json` (addresses only — safe to commit) and verifies contract code plus role grants. Never reuse the Anvil keys above on a real network.
+
+Use a **plain EOA** for the deployer. EIP-7702 delegated/smart accounts cannot reliably create contracts, and many public RPCs rate-limit them; `scripts/deploy-sepolia.sh` rejects them up front. Create one with `cast wallet new` if needed.
+
+Sepolia activated **Glamsterdam (EIP-8037)** on 2026-10-06, which raised state-creation gas costs (code deposit 200 → 1,530 gas/byte, new storage slot 20,000 → 97,920 gas). Foundry's local EVM still estimates with the old schedule, so `deploy-chain.sh` applies `--gas-estimate-multiplier 1200` for non-Anvil networks. Override with `GAS_ESTIMATE_MULTIPLIER=...` if a deployment still runs out of gas.
 
 **3. ML service (Render Docker).** Dockerfile `services/ml/Dockerfile`, context = repo root. The image trains and bakes `model.joblib` at build time. Health check: `/health`.
 
